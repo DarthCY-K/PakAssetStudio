@@ -1,0 +1,98 @@
+THIRD-PARTY NOTICES
+
+PAK Asset Studio uses and redistributes the following third-party components.
+License texts for components shipped under the Tools/ directory are included
+next to each component. Notices for components compiled into the application
+binary are reproduced in full below.
+
+====================================================================
+
+repak — Rust library and CLI for Unreal Engine .pak files
+https://github.com/trumank/repak
+License: MIT OR Apache-2.0
+Full license texts: Tools/repak/LICENSE-MIT, Tools/repak/LICENSE-APACHE
+
+====================================================================
+
+UE Viewer (umodel)
+Copyright (c) 2022 Konstantin Nosov
+https://www.gildor.org/en/projects/umodel
+License: MIT
+Full license text: Tools/umodel/LICENSE.txt
+
+====================================================================
+
+Open Asset Import Library (assimp)
+https://github.com/assimp/assimp
+License: BSD 3-Clause
+Full license text: Tools/assimp/LICENSE
+
+====================================================================
+
+Simple DirectMedia Layer (SDL2)
+Copyright (C) 1997-2025 Sam Lantinga <slouken@libsdl.org>
+https://www.libsdl.org
+License: zlib
+
+This software is provided 'as-is', without any express or implied warranty.
+In no event will the authors be held liable for any damages arising from the
+use of this software. Permission is granted to anyone to use this software
+for any purpose, including commercial applications, and to alter it and
+redistribute it freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software.
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
+
+====================================================================
+
+Python embeddable runtime
+Copyright (c) Python Software Foundation
+https://www.python.org
+License: PSF License Agreement
+Full license text: Tools/python/LICENSE.txt
+
+====================================================================
+
+Microsoft Visual C++ Redistributable (vc_redist.x64.exe)
+Copyright (c) Microsoft Corporation
+Redistributed under the Microsoft Visual Studio license terms
+("Distributable Code"). The unmodified installer is provided in
+Prerequisites/vc_redist.x64.exe for end-user installation.
+
+====================================================================
+
+.NET Runtime
+Copyright (c) .NET Foundation and Contributors
+https://github.com/dotnet/runtime
+License: MIT
+
+====================================================================
+
+WPF UI (compiled into the application binary)
+https://github.com/lepoco/wpfui
+
+MIT License
+
+Copyright (c) 2021-2025 Leszek Pomianowski and WPF UI Contributors
+https://lepo.co/
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
