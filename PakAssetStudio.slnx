@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="PakAssetStudio.Tests/PakAssetStudio.Tests.csproj" />
+  <Project Path="PakAssetStudio/PakAssetStudio.csproj" />
+</Solution>

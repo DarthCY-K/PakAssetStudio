@@ -1,0 +1,30 @@
+# .NET build output
+**/bin/
+**/obj/
+**/publish/
+artifacts/
+releases/
+
+# IDE and user settings
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.rsuser
+
+# Runtime output
+*.log
+PakAssetStudio.log
+CookedAssets/
+ExportedAssets/
+FbxAssets/
+
+# Local packages and release archives
+PakAssetStudio-v*-win-x64.zip
+PakAssetStudio-v*-win-x64.zip.sha256
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
