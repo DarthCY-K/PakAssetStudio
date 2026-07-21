@@ -8,8 +8,10 @@
     <Nullable>enable</Nullable>
     <AssemblyName>PakAssetStudio</AssemblyName>
     <RootNamespace>PakAssetStudio</RootNamespace>
-    <Version>0.1.1</Version>
     <Product>PAK Asset Studio</Product>
+    <!-- MinVer：版本号由 git tag 自动生成。打 v0.2.0 标签即得 0.2.0；标签之后的提交自动变为预发布版本（如 0.2.0-alpha.0.3+sha） -->
+    <MinVerMinimumMajorMinor>0.1</MinVerMinimumMajorMinor>
+    <MinVerTagPrefix>v</MinVerTagPrefix>
     <Description>UE4 PAK extraction and model/texture export desktop workflow.</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
@@ -34,5 +36,9 @@
 
   <ItemGroup>
     <PackageReference Include="WPF-UI" Version="4.3.0" />
+    <PackageReference Include="MinVer" Version="6.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 </Project>
