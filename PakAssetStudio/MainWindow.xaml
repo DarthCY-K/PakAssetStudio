@@ -154,6 +154,7 @@
       </ui:TitleBar.Icon>
       <ui:TitleBar.TrailingContent>
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock x:Name="VersionText" FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
           <ComboBox x:Name="LanguageBox" Width="116" Margin="0,0,10,0" VerticalAlignment="Center"
                     DisplayMemberPath="Name" SelectionChanged="LanguageBox_SelectionChanged" />
           <Border Background="#1AFFFFFF" CornerRadius="11" Padding="11,4" VerticalAlignment="Center" Margin="0,0,10,0">

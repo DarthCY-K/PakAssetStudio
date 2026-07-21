@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -65,7 +66,22 @@ public partial class MainWindow : FluentWindow
         _selectingLanguage = false;
         Instance.LanguageChanged += (_, _) => OnLanguageChanged();
 
+        VersionText.Text = GetDisplayVersion();
+
         UpdateOptionState();
+    }
+
+    // 显示 InformationalVersion：正式版为 v0.2.0；预发布版本附带短提交号，如 v0.2.0-alpha.0.3+abc1234
+    private static string GetDisplayVersion()
+    {
+        var info = System.Reflection.Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (string.IsNullOrEmpty(info)) return "v?";
+        var plus = info.IndexOf('+');
+        if (plus < 0) return "v" + info;
+        var hash = info[(plus + 1)..];
+        if (hash.Length > 7) hash = hash[..7];
+        return $"v{info[..plus]}+{hash}";
     }
 
     private void BrowseGame_Click(object sender, RoutedEventArgs e)
