@@ -11,6 +11,7 @@ PAK Asset Studio 是一个 Windows 桌面工具，用于扫描和解包传统 UE
 - UModel 批量导出 glTF、PNG、HDR 和材质描述
 - Assimp 批量转换和重新验证二进制 FBX
 - 中文路径、取消、磁盘空间预检查、失败保留和持久日志
+- 多语言界面（内置简体中文和 English，可向 `Languages/` 目录投放语言文件扩展）
 - 不修改原游戏目录
 
 ## 使用

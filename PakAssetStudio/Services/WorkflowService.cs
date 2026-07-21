@@ -15,7 +15,7 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
     public async Task RunAsync(
         IReadOnlyList<PakEntry> entries,
         WorkflowOptions options,
-        Action<string> log,
+        Action<string, UiLogLevel> log,
         Action<double, string> progress,
         CancellationToken cancellationToken)
     {
@@ -23,11 +23,11 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
         var logPath = Path.Combine(options.OutputDirectory, "PakAssetStudio.log");
         var logLines = new ConcurrentQueue<string>();
 
-        void WriteLog(string message)
+        void WriteLog(string message, UiLogLevel level = UiLogLevel.Info)
         {
             var line = $"[{DateTime.Now:HH:mm:ss}] {message}";
             logLines.Enqueue(line);
-            log(line);
+            log(line, level);
         }
 
         // 低占用模式：限制并行度，子进程以低优先级运行，减少对其他程序的干扰
@@ -37,7 +37,7 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
         try
         {
             if (options.LowResource)
-                WriteLog($"低占用模式已启用：并行度限制为 {workers}，子进程以低优先级运行。");
+                WriteLog(LocalizationService.TextFormat("Log_LowResource", workers), UiLogLevel.Stage);
             var cookedDirectory = Path.Combine(options.OutputDirectory, "CookedAssets");
             var exportDirectory = Path.Combine(options.OutputDirectory, "ExportedAssets");
 
@@ -47,12 +47,12 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
                 var ordered = PakToolService.GetExtractionOrder(entries);
                 if (ordered.Count == 0) throw new InvalidOperationException("没有可解包的 Unreal PAK。请先扫描并检查密钥。");
 
-                WriteLog($"开始解包 {ordered.Count} 个 PAK。输出：{cookedDirectory}");
+                WriteLog($"开始解包 {ordered.Count} 个 PAK。输出：{cookedDirectory}", UiLogLevel.Stage);
                 for (var index = 0; index < ordered.Count; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var pak = ordered[index];
-                    progress(5 + 45d * index / ordered.Count, $"解包 {pak.Name}");
+                    progress(5 + 45d * index / ordered.Count, LocalizationService.TextFormat("Stage_Extracting", pak.Name));
                     WriteLog($"解包：{pak.FullPath}");
 
                     var command = new List<string> { "unpack", pak.FullPath, "-o", cookedDirectory, "-q" };
@@ -62,7 +62,7 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
                         pakToolService.RepakPath,
                         arguments,
                         Path.GetDirectoryName(pakToolService.RepakPath),
-                        WriteLog,
+                        line => WriteLog(line),
                         cancellationToken,
                         priority);
                     if (result.ExitCode != 0) throw new InvalidOperationException($"解包失败：{pak.Name}");
@@ -75,8 +75,8 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
                     throw new DirectoryNotFoundException($"找不到 cooked 目录：{cookedDirectory}");
                 EnsureFile(_umodelPath, "缺少 UModel");
                 Directory.CreateDirectory(exportDirectory);
-                progress(52, "导出模型和贴图");
-                WriteLog($"启动 UModel，profile={options.GameProfile}");
+                progress(52, LocalizationService.Text("Stage_Exporting"));
+                WriteLog($"启动 UModel，profile={options.GameProfile}", UiLogLevel.Stage);
 
                 var arguments = new List<string>
                 {
@@ -93,7 +93,7 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
                     _umodelPath,
                     arguments,
                     Path.GetDirectoryName(_umodelPath),
-                    WriteLog,
+                    line => WriteLog(line),
                     cancellationToken,
                     priority);
                 if (result.ExitCode != 0) throw new InvalidOperationException("UModel 导出失败，请查看日志。");
@@ -111,14 +111,14 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
                 if (options.KeepGltf)
                 {
                     conversionDirectory = Path.Combine(options.OutputDirectory, "FbxAssets");
-                    progress(76, "复制 FBX 工作副本");
-                    WriteLog($"复制 glTF 导出目录到：{conversionDirectory}");
+                    progress(76, LocalizationService.Text("Stage_CopyFbx"));
+                    WriteLog($"复制 glTF 导出目录到：{conversionDirectory}", UiLogLevel.Stage);
                     await CopyDirectoryAsync(exportDirectory, conversionDirectory, options.Overwrite,
-                        value => progress(76 + value * 8, "复制 FBX 工作副本"), cancellationToken);
+                        value => progress(76 + value * 8, LocalizationService.Text("Stage_CopyFbx")), cancellationToken);
                 }
 
-                progress(85, "转换并验证 FBX");
-                WriteLog("启动 Assimp FBX 批量转换。");
+                progress(85, LocalizationService.Text("Stage_Converting"));
+                WriteLog("启动 Assimp FBX 批量转换。", UiLogLevel.Stage);
                 var arguments = new[]
                 {
                     _converterPath, conversionDirectory, "--dll", _assimpPath,
@@ -128,14 +128,14 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
                 {
                     WriteLog(line);
                     var parsed = TryParseConverterProgress(line);
-                    if (parsed.HasValue) progress(85 + parsed.Value * 14, "转换并验证 FBX");
+                    if (parsed.HasValue) progress(85 + parsed.Value * 14, LocalizationService.Text("Stage_Converting"));
                 }, cancellationToken, priority);
                 if (result.ExitCode != 0) throw new InvalidOperationException("部分 FBX 转换失败，原 glTF 已保留。请查看失败清单。");
             }
 
-            progress(100, "处理完成");
-            await WriteSummaryAsync(options.OutputDirectory, WriteLog, cancellationToken);
-            WriteLog("全部任务完成。");
+            progress(100, LocalizationService.Text("Stage_Done"));
+            await WriteSummaryAsync(options.OutputDirectory, line => WriteLog(line), cancellationToken);
+            WriteLog("全部任务完成。", UiLogLevel.Success);
         }
         finally
         {

@@ -10,6 +10,7 @@ PAK Asset Studio v0.1.1 是一个 Windows WPF 桌面工具，封装传统 UE4 PA
 
 - C# / WPF / .NET 10，目标 `net10.0-windows`
 - UI 使用 WPF-UI (lepo.co) 4.x 深色主题 + 自定义青绿强调色，主窗口为 `ui:FluentWindow`（Mica 背景），强调色在 `App.OnStartup` 通过 `ApplicationAccentColorManager.Apply` 设置
+- 多语言：`LocalizationService` 从程序目录 `Languages/*.json` 加载（缺项回退 zh-CN，再回退键名），XAML 用 `{l:Loc Key}`（`LocExtension`），代码用 `LocalizationService.Text/TextFormat`；语言偏好存于 `%LOCALAPPDATA%/PakAssetStudio/settings.json`；新增语言只需投放同名格式 JSON
 - Windows 10/11 x64
 - 不要求安装 Unreal Editor
 - 发布包自带 .NET runtime、Python embeddable runtime 和原生工具
@@ -53,7 +54,7 @@ AI_HANDOFF.md
 | `Models/WorkflowOptions.cs` | 工作流参数 |
 | `Services/ProcessRunner.cs` | 外部进程执行、输出捕获和取消 |
 | `Services/PakToolService.cs` | repak 扫描、元数据解析和提取顺序 |
-| `Services/Ue4ProfileDetector.cs` | 按 PAK 格式版本推测 UE4 版本标签（映射见 repak 兼容性表） |
+| `Services/Ue4ProfileDetector.cs` | 按 PAK 格式版本推测 UE4 版本标签（映射见 repak 兼容性表；V11 跨 4.26–5.3，默认取 ue4.26 并提示可手动切换） |
 | `Services/WorkflowService.cs` | 解包、UModel 导出、目录复制与 FBX 转换 |
 | `Services/UiLogBuffer.cs` | 有界 UI 日志队列，避免大量输出堵塞 UI 线程 |
 | `tools/convert_gltf_to_fbx.py` | 通过 Assimp 转换并验证 FBX |

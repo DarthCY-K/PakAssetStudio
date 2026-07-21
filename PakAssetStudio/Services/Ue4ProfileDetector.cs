@@ -41,7 +41,8 @@ public static class Ue4ProfileDetector
         "V8B" => "ue4.24",
         "V9" => "ue4.25",
         "V10" => "ue4.26",
-        "V11" => "ue4.27",
+        // V11 同时见于 UE4.26–5.3；本工具只面向 UE4，取 ue4.26 更稳妥，界面会提示可手动切到 ue4.27
+        "V11" => "ue4.26",
         _ => null
     };
 }

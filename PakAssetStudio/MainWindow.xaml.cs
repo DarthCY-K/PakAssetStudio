@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -15,6 +16,7 @@ using DataFormats = System.Windows.DataFormats;
 using DragDropEffects = System.Windows.DragDropEffects;
 using FluentWindow = Wpf.Ui.Controls.FluentWindow;
 using MessageBox = System.Windows.MessageBox;
+using static PakAssetStudio.Services.LocalizationService;
 
 namespace PakAssetStudio;
 
@@ -30,6 +32,8 @@ public partial class MainWindow : FluentWindow
     private string? _lastScannedDirectory;
     private bool _profileManuallySet;
     private bool _updatingProfile;
+    private bool _selectingLanguage;
+    private (int Total, int Valid, long Bytes)? _scanSummary;
     private readonly ICollectionView _pakView;
 
     public ObservableCollection<PakEntry> PakEntries { get; } = [];
@@ -54,12 +58,19 @@ public partial class MainWindow : FluentWindow
         // 默认隐藏不支持的 PAK，由“显示不支持的包”开关控制
         _pakView = CollectionViewSource.GetDefaultView(PakEntries);
         _pakView.Filter = entry => ShowUnsupportedCheck.IsChecked == true || ((PakEntry)entry).IsValid;
+
+        _selectingLanguage = true;
+        LanguageBox.ItemsSource = Instance.AvailableLanguages;
+        LanguageBox.SelectedItem = Instance.AvailableLanguages.FirstOrDefault(l => l.Code == Instance.CurrentCode);
+        _selectingLanguage = false;
+        Instance.LanguageChanged += (_, _) => OnLanguageChanged();
+
         UpdateOptionState();
     }
 
     private void BrowseGame_Click(object sender, RoutedEventArgs e)
     {
-        var path = ChooseFolder("选择游戏根目录或 Paks 目录", GameDirectoryBox.Text);
+        var path = ChooseFolder(Text("Choose_GameDir"), GameDirectoryBox.Text);
         if (path is null) return;
         GameDirectoryBox.Text = path;
         if (string.IsNullOrWhiteSpace(OutputDirectoryBox.Text))
@@ -71,7 +82,7 @@ public partial class MainWindow : FluentWindow
 
     private void BrowseOutput_Click(object sender, RoutedEventArgs e)
     {
-        var path = ChooseFolder("选择输出目录", OutputDirectoryBox.Text);
+        var path = ChooseFolder(Text("Choose_OutputDir"), OutputDirectoryBox.Text);
         if (path is not null) OutputDirectoryBox.Text = path;
     }
 
@@ -85,14 +96,14 @@ public partial class MainWindow : FluentWindow
         var root = GameDirectoryBox.Text.Trim();
         if (!Directory.Exists(root))
         {
-            MessageBox.Show("请选择有效的游戏目录。", "路径无效", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(Text("Dialog_InvalidPath"), Text("Dialog_InvalidPathTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return false;
         }
 
-        SetBusy(true, "正在扫描 PAK");
+        SetBusy(true, Text("Status_Scanning"));
         TaskProgress.Value = 0;
         PakEntries.Clear();
-        AppendLog($"扫描目录：{root}");
+        AppendLog(TextFormat("Log_Scanning", root), UiLogLevel.Stage);
         _cancellation = new CancellationTokenSource();
 
         try
@@ -100,37 +111,38 @@ public partial class MainWindow : FluentWindow
             var entries = await _pakToolService.ScanAsync(root, EmptyToNull(AesKeyBox.Password), (done, total) =>
             {
                 TaskProgress.Value = total == 0 ? 0 : done * 100d / total;
-                StageText.Text = $"读取 PAK 信息 {done}/{total}";
+                StageText.Text = TextFormat("Status_ScanProgress", done, total);
             }, _cancellation.Token);
             foreach (var entry in entries) PakEntries.Add(entry);
             _lastScannedDirectory = Path.GetFullPath(root);
 
             var valid = entries.Count(entry => entry.IsValid);
             var bytes = entries.Where(entry => entry.IsValid).Sum(entry => entry.SizeBytes);
-            WorkspaceSummaryText.Text = $"发现 {entries.Count} 个 .pak；{valid} 个 Unreal PAK；总计 {FormatBytes(bytes)}";
-            AppendLog($"扫描完成：{valid}/{entries.Count} 个 PAK 可读取。");
+            _scanSummary = (entries.Count, valid, bytes);
+            UpdateScanSummaryText();
+            AppendLog(TextFormat("Log_ScanDone", valid, entries.Count), UiLogLevel.Stage);
             ApplyDetectedProfile(entries);
 
             if (entries.Count == 0 && showNoPakMessage)
-                MessageBox.Show("目录中没有找到 .pak 文件。", "扫描完成", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(Text("Dialog_NoPaks"), Text("Dialog_ScanDoneTitle"), MessageBoxButton.OK, MessageBoxImage.Information);
             else if (valid == 0 && showNoPakMessage)
-                MessageBox.Show("找到了 .pak，但没有可读取的 Unreal PAK。它们可能是 Chromium 数据包、IoStore 辅助包或需要 AES 密钥。", "无法读取", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(Text("Dialog_NoValidPaks"), Text("Dialog_CannotReadTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return valid > 0;
         }
         catch (OperationCanceledException)
         {
-            AppendLog("扫描已取消。");
+            AppendLog(Text("Log_ScanCancelled"), UiLogLevel.Warning);
             return false;
         }
         catch (Exception ex)
         {
-            AppendLog("扫描失败：" + ex.Message);
-            MessageBox.Show(ex.Message, "扫描失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            AppendLog(TextFormat("Log_ScanFailed", ex.Message), UiLogLevel.Error);
+            MessageBox.Show(ex.Message, Text("Dialog_ScanFailedTitle"), MessageBoxButton.OK, MessageBoxImage.Error);
             return false;
         }
         finally
         {
-            SetBusy(false, "就绪");
+            SetBusy(false, Text("App_Ready"));
         }
     }
 
@@ -140,19 +152,19 @@ public partial class MainWindow : FluentWindow
         var outputDirectory = OutputDirectoryBox.Text.Trim();
         if (!Directory.Exists(gameDirectory))
         {
-            MessageBox.Show("请选择有效的游戏目录。", "路径无效", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(Text("Dialog_InvalidPath"), Text("Dialog_InvalidPathTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         if (string.IsNullOrWhiteSpace(outputDirectory))
         {
-            MessageBox.Show("请选择输出目录。", "路径无效", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(Text("Dialog_ChooseOutput"), Text("Dialog_InvalidPathTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         var normalizedGame = Path.GetFullPath(gameDirectory);
         var normalizedOutput = Path.GetFullPath(outputDirectory);
         if (IsSameOrChild(normalizedOutput, normalizedGame))
         {
-            MessageBox.Show("输出目录必须位于游戏目录之外，避免向原游戏目录写入文件。", "输出位置不安全", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(Text("Dialog_UnsafeOutput"), Text("Dialog_UnsafeOutputTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -164,7 +176,7 @@ public partial class MainWindow : FluentWindow
         var options = BuildOptions(gameDirectory, outputDirectory);
         if (!options.ExtractPaks && !options.ExportModels && !options.ExportTextures && !options.ConvertToFbx)
         {
-            MessageBox.Show("请至少选择一个处理步骤。", "没有任务", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(Text("Dialog_NoSteps"), Text("Dialog_NoStepsTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -174,48 +186,48 @@ public partial class MainWindow : FluentWindow
             if (free < required)
             {
                 var answer = MessageBox.Show(
-                    $"预计需要约 {FormatBytes(required)}，当前磁盘可用 {FormatBytes(free)}。继续可能导致任务中断。\n\n仍要继续吗？",
-                    "磁盘空间可能不足", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                    TextFormat("Dialog_DiskSpace", FormatBytes(required), FormatBytes(free)),
+                    Text("Dialog_DiskSpaceTitle"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
                 if (answer != MessageBoxResult.Yes) return;
             }
         }
         catch (Exception ex)
         {
-            MessageBox.Show("无法检查输出磁盘：" + ex.Message, "磁盘检查失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(TextFormat("Dialog_DiskCheckFailed", ex.Message), Text("Dialog_DiskCheckTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
         _uiLogs.Clear();
-        LogBox.Clear();
-        SetBusy(true, "准备任务");
+        LogBox.Document.Blocks.Clear();
+        SetBusy(true, Text("Status_Preparing"));
         _cancellation = new CancellationTokenSource();
         try
         {
             await _workflowService.RunAsync(PakEntries.ToList(), options, AppendLog, UpdateProgress, _cancellation.Token);
             HeaderStatusDot.Fill = new SolidColorBrush(Color.FromRgb(99, 199, 168));
-            MessageBox.Show("处理完成。详细结果和日志已写入输出目录。", "任务完成", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(Text("Dialog_TaskDone"), Text("Dialog_TaskDoneTitle"), MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (OperationCanceledException)
         {
-            AppendLog("任务已由用户取消。");
-            StageText.Text = "任务已取消";
+            AppendLog(Text("Log_TaskCancelled"), UiLogLevel.Warning);
+            StageText.Text = Text("Status_TaskCancelled");
         }
         catch (Exception ex)
         {
-            AppendLog("任务失败：" + ex.Message);
+            AppendLog(TextFormat("Log_TaskFailed", ex.Message), UiLogLevel.Error);
             HeaderStatusDot.Fill = new SolidColorBrush(Color.FromRgb(217, 111, 80));
-            MessageBox.Show(ex.Message, "任务失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(ex.Message, Text("Dialog_TaskFailedTitle"), MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
-            SetBusy(false, "就绪");
+            SetBusy(false, Text("App_Ready"));
         }
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {
         CancelButton.IsEnabled = false;
-        StageText.Text = "正在取消…";
+        StageText.Text = Text("Status_Cancelling");
         _cancellation?.Cancel();
     }
 
@@ -267,7 +279,7 @@ public partial class MainWindow : FluentWindow
         if (_profileManuallySet)
         {
             if (!GameProfileBox.Text.Trim().Equals(detected, StringComparison.OrdinalIgnoreCase))
-                AppendLog($"提示：按 PAK 格式版本推测为 {detected}，保留当前手动选择。");
+                AppendLog(TextFormat("Log_ProfileHint", detected));
             return;
         }
 
@@ -275,7 +287,9 @@ public partial class MainWindow : FluentWindow
         GameProfileBox.Text = detected;
         _updatingProfile = false;
         ProfileAutoHint.Visibility = Visibility.Visible;
-        AppendLog($"已按 PAK 格式版本自动识别 UE4 版本标签：{detected}（可手动修改）。");
+        AppendLog(TextFormat("Log_ProfileDetected", detected), UiLogLevel.Stage);
+        if (entries.Any(entry => entry.IsValid && entry.Version.Trim().Equals("V11", StringComparison.OrdinalIgnoreCase)))
+            AppendLog(Text("Log_ProfileAmbiguous"), UiLogLevel.Warning);
     }
 
     private void Option_Changed(object sender, RoutedEventArgs e) => UpdateOptionState();
@@ -290,10 +304,32 @@ public partial class MainWindow : FluentWindow
     {
         var filteredEmpty = PakEntries.Count > 0 && _pakView.IsEmpty;
         PakEmptyState.Visibility = _pakView.IsEmpty ? Visibility.Visible : Visibility.Collapsed;
-        PakEmptyTitle.Text = filteredEmpty ? "没有可读取的 PAK" : "暂无 PAK 包";
-        PakEmptyHint.Text = filteredEmpty
-            ? "打开右上角“显示不支持的包”可查看全部文件"
-            : "选择游戏目录后点击“扫描 PAK”，或将目录直接拖入窗口";
+        PakEmptyTitle.Text = Text(filteredEmpty ? "Empty_FilteredTitle" : "Empty_Title");
+        PakEmptyHint.Text = Text(filteredEmpty ? "Empty_FilteredHint" : "Empty_Hint");
+    }
+
+    private void UpdateScanSummaryText()
+    {
+        if (_scanSummary is not { } summary) return;
+        WorkspaceSummaryText.Text = TextFormat("Summary_ScanResult", summary.Total, summary.Valid, FormatBytes(summary.Bytes));
+    }
+
+    private void LanguageBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_selectingLanguage || LanguageBox.SelectedItem is not LanguageInfo language) return;
+        Instance.SetLanguage(language.Code);
+    }
+
+    private void OnLanguageChanged()
+    {
+        UpdatePakEmptyState();
+        UpdateScanSummaryText();
+        _pakView.Refresh();
+        if (!_isBusy)
+        {
+            StageText.Text = Text("Stage_Idle");
+            HeaderStatusText.Text = Text("App_Ready");
+        }
     }
 
     private void UpdateOptionState()
@@ -349,27 +385,72 @@ public partial class MainWindow : FluentWindow
         });
     }
 
-    private void AppendLog(string line)
+    private void AppendLog(string line, UiLogLevel level = UiLogLevel.Info)
     {
-        _uiLogs.Enqueue(line);
+        if (level == UiLogLevel.Info)
+        {
+            // 工具输出按内容自动分级
+            if (line.Contains("ERROR", StringComparison.OrdinalIgnoreCase)) level = UiLogLevel.Error;
+            else if (line.Contains("WARNING", StringComparison.OrdinalIgnoreCase)) level = UiLogLevel.Warning;
+        }
+        _uiLogs.Enqueue(line, level);
     }
+
+    private static readonly FrozenBrushSet LogBrushes = new();
 
     private void FlushPendingLogs()
     {
-        const int maximumCharacters = 800_000;
-        const int retainedCharacters = 550_000;
+        const int maximumLines = 6_000;
+        const int retainedLines = 4_500;
 
         var batch = _uiLogs.Drain();
-        if (batch.Text.Length == 0) return;
+        if (batch.Lines.Count == 0) return;
 
-        LogBox.AppendText(batch.Text);
-        if (LogBox.Text.Length > maximumCharacters)
+        // 用户上翻查看时不强制回到底部
+        var stickToBottom = LogBox.VerticalOffset + LogBox.ViewportHeight >= LogBox.ExtentHeight - 4;
+
+        var document = LogBox.Document;
+        foreach (var line in batch.Lines)
         {
-            var start = LogBox.Text.Length - retainedCharacters;
-            var newline = LogBox.Text.IndexOf('\n', start);
-            LogBox.Text = newline >= 0 ? LogBox.Text[(newline + 1)..] : LogBox.Text[^retainedCharacters..];
+            var run = new Run(line.Text) { Foreground = LogBrushes[line.Level] };
+            if (line.Level is UiLogLevel.Success or UiLogLevel.Error) run.FontWeight = FontWeights.SemiBold;
+            document.Blocks.Add(new Paragraph(run) { Margin = new Thickness(0), LineHeight = 16 });
         }
-        LogBox.ScrollToEnd();
+
+        if (document.Blocks.Count > maximumLines)
+        {
+            var toRemove = document.Blocks.Count - retainedLines;
+            for (var index = 0; index < toRemove; index++)
+                document.Blocks.Remove(document.Blocks.FirstBlock);
+        }
+
+        if (stickToBottom) LogBox.ScrollToEnd();
+    }
+
+    /// <summary>日志级别画刷，提前冻结避免跨线程问题。</summary>
+    private sealed class FrozenBrushSet
+    {
+        private readonly SolidColorBrush _info = Freeze(Color.FromRgb(0xA8, 0xBB, 0xB5));
+        private readonly SolidColorBrush _stage = Freeze(Color.FromRgb(0x35, 0xD0, 0xA5));
+        private readonly SolidColorBrush _success = Freeze(Color.FromRgb(0x7E, 0xE0, 0xB8));
+        private readonly SolidColorBrush _warning = Freeze(Color.FromRgb(0xE3, 0xB3, 0x41));
+        private readonly SolidColorBrush _error = Freeze(Color.FromRgb(0xE0, 0x6C, 0x5B));
+
+        public SolidColorBrush this[UiLogLevel level] => level switch
+        {
+            UiLogLevel.Stage => _stage,
+            UiLogLevel.Success => _success,
+            UiLogLevel.Warning => _warning,
+            UiLogLevel.Error => _error,
+            _ => _info
+        };
+
+        private static SolidColorBrush Freeze(Color color)
+        {
+            var brush = new SolidColorBrush(color);
+            brush.Freeze();
+            return brush;
+        }
     }
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -379,7 +460,7 @@ public partial class MainWindow : FluentWindow
             _logFlushTimer.Stop();
             return;
         }
-        var answer = MessageBox.Show("任务仍在运行。关闭窗口会终止当前子进程，确定关闭吗？", "任务运行中", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        var answer = MessageBox.Show(Text("Dialog_CloseWhileBusy"), Text("Dialog_BusyTitle"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (answer != MessageBoxResult.Yes)
         {
             e.Cancel = true;

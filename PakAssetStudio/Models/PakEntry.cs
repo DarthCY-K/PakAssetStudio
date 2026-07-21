@@ -14,7 +14,9 @@ public sealed class PakEntry
     public int FileCount { get; set; }
     public bool IsEncrypted { get; set; }
     public bool IsValid { get; set; }
-    public string Status => IsValid ? (IsEncrypted ? "已加密" : "可读取") : "不支持";
+    public string Status => IsValid
+        ? (IsEncrypted ? Services.LocalizationService.Text("Pak_StatusEncrypted") : Services.LocalizationService.Text("Pak_StatusReadable"))
+        : Services.LocalizationService.Text("Pak_StatusUnsupported");
     public bool IsPatch => Name.Contains("_P.", StringComparison.OrdinalIgnoreCase)
         || Name.Contains("patch", StringComparison.OrdinalIgnoreCase);
     public bool IsOptional => Name.Contains("optional", StringComparison.OrdinalIgnoreCase);

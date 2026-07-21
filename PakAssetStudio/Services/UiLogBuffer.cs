@@ -1,17 +1,27 @@
 using System.Collections.Concurrent;
-using System.Text;
 
 namespace PakAssetStudio.Services;
 
-public sealed record UiLogBatch(string Text, int Dropped, int Remaining);
+public enum UiLogLevel
+{
+    Info,
+    Stage,
+    Success,
+    Warning,
+    Error
+}
+
+public sealed record UiLogLine(UiLogLevel Level, string Text);
+
+public sealed record UiLogBatch(IReadOnlyList<UiLogLine> Lines, int Dropped, int Remaining);
 
 public sealed class UiLogBuffer
 {
-    private readonly ConcurrentQueue<string> _lines = new();
+    private readonly ConcurrentQueue<UiLogLine> _lines = new();
 
     public int Count => _lines.Count;
 
-    public void Enqueue(string line) => _lines.Enqueue(line);
+    public void Enqueue(string line, UiLogLevel level = UiLogLevel.Info) => _lines.Enqueue(new UiLogLine(level, line));
 
     public void Clear()
     {
@@ -31,11 +41,11 @@ public sealed class UiLogBuffer
             while (dropped < toDrop && _lines.TryDequeue(out _)) dropped++;
         }
 
-        var builder = new StringBuilder();
+        var lines = new List<UiLogLine>();
         if (dropped > 0)
-            builder.AppendLine($"[界面日志已省略 {dropped:N0} 行；完整内容保存在 PakAssetStudio.log]");
+            lines.Add(new UiLogLine(UiLogLevel.Warning, $"[界面日志已省略 {dropped:N0} 行；完整内容保存在 PakAssetStudio.log]"));
         for (var index = 0; index < batchSize && _lines.TryDequeue(out var line); index++)
-            builder.AppendLine(line);
-        return new UiLogBatch(builder.ToString(), dropped, _lines.Count);
+            lines.Add(line);
+        return new UiLogBatch(lines, dropped, _lines.Count);
     }
 }
