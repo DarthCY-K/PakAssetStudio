@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -11,11 +13,12 @@ using PakAssetStudio.Services;
 using Color = System.Windows.Media.Color;
 using DataFormats = System.Windows.DataFormats;
 using DragDropEffects = System.Windows.DragDropEffects;
+using FluentWindow = Wpf.Ui.Controls.FluentWindow;
 using MessageBox = System.Windows.MessageBox;
 
 namespace PakAssetStudio;
 
-public partial class MainWindow : Window
+public partial class MainWindow : FluentWindow
 {
     private readonly ProcessRunner _processRunner = new();
     private readonly PakToolService _pakToolService;
@@ -25,6 +28,9 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _logFlushTimer;
     private bool _isBusy;
     private string? _lastScannedDirectory;
+    private bool _profileManuallySet;
+    private bool _updatingProfile;
+    private readonly ICollectionView _pakView;
 
     public ObservableCollection<PakEntry> PakEntries { get; } = [];
 
@@ -41,6 +47,13 @@ public partial class MainWindow : Window
         _logFlushTimer.Tick += (_, _) => FlushPendingLogs();
         _logFlushTimer.Start();
         Closing += MainWindow_Closing;
+        // 可编辑 ComboBox 的内部 TextBox 输入通过冒泡的 TextChanged 事件捕获
+        GameProfileBox.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
+            new TextChangedEventHandler(GameProfileBox_Changed));
+        PakEntries.CollectionChanged += (_, _) => UpdatePakEmptyState();
+        // 默认隐藏不支持的 PAK，由“显示不支持的包”开关控制
+        _pakView = CollectionViewSource.GetDefaultView(PakEntries);
+        _pakView.Filter = entry => ShowUnsupportedCheck.IsChecked == true || ((PakEntry)entry).IsValid;
         UpdateOptionState();
     }
 
@@ -96,6 +109,7 @@ public partial class MainWindow : Window
             var bytes = entries.Where(entry => entry.IsValid).Sum(entry => entry.SizeBytes);
             WorkspaceSummaryText.Text = $"发现 {entries.Count} 个 .pak；{valid} 个 Unreal PAK；总计 {FormatBytes(bytes)}";
             AppendLog($"扫描完成：{valid}/{entries.Count} 个 PAK 可读取。");
+            ApplyDetectedProfile(entries);
 
             if (entries.Count == 0 && showNoPakMessage)
                 MessageBox.Show("目录中没有找到 .pak 文件。", "扫描完成", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -232,10 +246,55 @@ public partial class MainWindow : Window
 
     private void PathBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (ReferenceEquals(sender, GameDirectoryBox)) _lastScannedDirectory = null;
+        if (ReferenceEquals(sender, GameDirectoryBox))
+        {
+            _lastScannedDirectory = null;
+            _profileManuallySet = false;
+        }
+    }
+
+    private void GameProfileBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded || _updatingProfile) return;
+        _profileManuallySet = true;
+        ProfileAutoHint.Visibility = Visibility.Collapsed;
+    }
+
+    private void ApplyDetectedProfile(IReadOnlyList<PakEntry> entries)
+    {
+        var detected = Ue4ProfileDetector.Detect(entries);
+        if (detected is null) return;
+        if (_profileManuallySet)
+        {
+            if (!GameProfileBox.Text.Trim().Equals(detected, StringComparison.OrdinalIgnoreCase))
+                AppendLog($"提示：按 PAK 格式版本推测为 {detected}，保留当前手动选择。");
+            return;
+        }
+
+        _updatingProfile = true;
+        GameProfileBox.Text = detected;
+        _updatingProfile = false;
+        ProfileAutoHint.Visibility = Visibility.Visible;
+        AppendLog($"已按 PAK 格式版本自动识别 UE4 版本标签：{detected}（可手动修改）。");
     }
 
     private void Option_Changed(object sender, RoutedEventArgs e) => UpdateOptionState();
+
+    private void UnsupportedFilter_Changed(object sender, RoutedEventArgs e)
+    {
+        _pakView.Refresh();
+        UpdatePakEmptyState();
+    }
+
+    private void UpdatePakEmptyState()
+    {
+        var filteredEmpty = PakEntries.Count > 0 && _pakView.IsEmpty;
+        PakEmptyState.Visibility = _pakView.IsEmpty ? Visibility.Visible : Visibility.Collapsed;
+        PakEmptyTitle.Text = filteredEmpty ? "没有可读取的 PAK" : "暂无 PAK 包";
+        PakEmptyHint.Text = filteredEmpty
+            ? "打开右上角“显示不支持的包”可查看全部文件"
+            : "选择游戏目录后点击“扫描 PAK”，或将目录直接拖入窗口";
+    }
 
     private void UpdateOptionState()
     {
@@ -263,7 +322,8 @@ public partial class MainWindow : Window
             ConvertToFbx = FbxCheck.IsChecked == true,
             KeepGltf = KeepGltfCheck.IsChecked == true,
             Overwrite = OverwriteCheck.IsChecked == true,
-            Workers = workers > 0 ? workers : 8
+            Workers = workers > 0 ? workers : 8,
+            LowResource = LowResourceCheck.IsChecked == true
         };
     }
 

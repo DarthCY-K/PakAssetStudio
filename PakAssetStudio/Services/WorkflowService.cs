@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
 using PakAssetStudio.Models;
 
@@ -29,8 +30,14 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
             log(line);
         }
 
+        // 低占用模式：限制并行度，子进程以低优先级运行，减少对其他程序的干扰
+        var workers = GetEffectiveWorkers(options);
+        var priority = options.LowResource ? ProcessPriorityClass.BelowNormal : (ProcessPriorityClass?)null;
+
         try
         {
+            if (options.LowResource)
+                WriteLog($"低占用模式已启用：并行度限制为 {workers}，子进程以低优先级运行。");
             var cookedDirectory = Path.Combine(options.OutputDirectory, "CookedAssets");
             var exportDirectory = Path.Combine(options.OutputDirectory, "ExportedAssets");
 
@@ -56,7 +63,8 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
                         arguments,
                         Path.GetDirectoryName(pakToolService.RepakPath),
                         WriteLog,
-                        cancellationToken);
+                        cancellationToken,
+                        priority);
                     if (result.ExitCode != 0) throw new InvalidOperationException($"解包失败：{pak.Name}");
                 }
             }
@@ -86,7 +94,8 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
                     arguments,
                     Path.GetDirectoryName(_umodelPath),
                     WriteLog,
-                    cancellationToken);
+                    cancellationToken,
+                    priority);
                 if (result.ExitCode != 0) throw new InvalidOperationException("UModel 导出失败，请查看日志。");
             }
 
@@ -113,14 +122,14 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
                 var arguments = new[]
                 {
                     _converterPath, conversionDirectory, "--dll", _assimpPath,
-                    "--workers", options.Workers.ToString()
+                    "--workers", workers.ToString()
                 };
                 var result = await processRunner.RunAsync(_pythonPath, arguments, AppContext.BaseDirectory, line =>
                 {
                     WriteLog(line);
                     var parsed = TryParseConverterProgress(line);
                     if (parsed.HasValue) progress(85 + parsed.Value * 14, "转换并验证 FBX");
-                }, cancellationToken);
+                }, cancellationToken, priority);
                 if (result.ExitCode != 0) throw new InvalidOperationException("部分 FBX 转换失败，原 glTF 已保留。请查看失败清单。");
             }
 
@@ -133,6 +142,10 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
             await File.WriteAllLinesAsync(logPath, logLines, CancellationToken.None);
         }
     }
+
+    /// <summary>低占用模式下限制并行度，避免占满 CPU。</summary>
+    public static int GetEffectiveWorkers(WorkflowOptions options) =>
+        options.LowResource ? Math.Min(options.Workers, 2) : options.Workers;
 
     public static (long RequiredBytes, long FreeBytes) EstimateDiskSpace(IEnumerable<PakEntry> entries, WorkflowOptions options)
     {

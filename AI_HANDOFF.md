@@ -9,6 +9,7 @@ PAK Asset Studio v0.1.1 是一个 Windows WPF 桌面工具，封装传统 UE4 PA
 ## 2. 技术栈与边界
 
 - C# / WPF / .NET 10，目标 `net10.0-windows`
+- UI 使用 WPF-UI (lepo.co) 4.x 深色主题 + 自定义青绿强调色，主窗口为 `ui:FluentWindow`（Mica 背景），强调色在 `App.OnStartup` 通过 `ApplicationAccentColorManager.Apply` 设置
 - Windows 10/11 x64
 - 不要求安装 Unreal Editor
 - 发布包自带 .NET runtime、Python embeddable runtime 和原生工具
@@ -52,6 +53,7 @@ AI_HANDOFF.md
 | `Models/WorkflowOptions.cs` | 工作流参数 |
 | `Services/ProcessRunner.cs` | 外部进程执行、输出捕获和取消 |
 | `Services/PakToolService.cs` | repak 扫描、元数据解析和提取顺序 |
+| `Services/Ue4ProfileDetector.cs` | 按 PAK 格式版本推测 UE4 版本标签（映射见 repak 兼容性表） |
 | `Services/WorkflowService.cs` | 解包、UModel 导出、目录复制与 FBX 转换 |
 | `Services/UiLogBuffer.cs` | 有界 UI 日志队列，避免大量输出堵塞 UI 线程 |
 | `tools/convert_gltf_to_fbx.py` | 通过 Assimp 转换并验证 FBX |
@@ -60,11 +62,13 @@ AI_HANDOFF.md
 
 1. 递归发现用户输入目录中的 `.pak`。
 2. 使用 repak `info` 判断版本、压缩、索引加密和文件数。
-3. 跳过不可读取或非 Unreal PAK。
+3. 跳过不可读取或非 Unreal PAK；UI 默认隐藏不支持的包，可用开关显示。
 4. 按基础包、optional 包、patch 包排序并依次解包到同一 cooked 目录。
 5. 调用 UModel，按用户选定的 UE4 profile 导出 glTF、贴图和材质描述。
 6. 可选复制导出目录，并用内置 Python + Assimp 将 glTF 转为 FBX。
 7. 完整日志写入磁盘；UI 只显示有界批次。
+
+低占用模式（`WorkflowOptions.LowResource`）：并行度钳制到 2，所有子进程以 `BelowNormal` 优先级运行（`ProcessRunner.RunAsync` 的 `priority` 参数）。
 
 安全规则：
 

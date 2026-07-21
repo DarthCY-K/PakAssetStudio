@@ -19,6 +19,24 @@ Assert(firstBatch.Dropped >= 45_000, "A large UI log backlog should discard old 
 Assert(firstBatch.Text.Contains("已省略"), "The UI log should report omitted display lines");
 Assert(firstBatch.Remaining <= 1_000, "The retained UI backlog should be bounded");
 
+var versionEntries = new List<PakEntry>
+{
+    new() { Name = "base.pak", FullPath = "base.pak", IsValid = true, Version = "V8B" },
+    new() { Name = "patch.pak", FullPath = "patch.pak", IsValid = true, Version = "V8A" },
+    new() { Name = "broken.pak", FullPath = "broken.pak", IsValid = false, Version = "V11" }
+};
+Assert(Ue4ProfileDetector.Detect(versionEntries) == "ue4.24", "V8B should map to the highest UE4 version of its range");
+Assert(Ue4ProfileDetector.Detect([new PakEntry { Name = "a.pak", FullPath = "a.pak", IsValid = true, Version = "V11" }]) == "ue4.27", "V11 should map to ue4.27");
+Assert(Ue4ProfileDetector.Detect([new PakEntry { Name = "a.pak", FullPath = "a.pak", IsValid = false, Version = "V11" }]) is null, "Invalid PAKs must not affect detection");
+Assert(Ue4ProfileDetector.Detect([new PakEntry { Name = "a.pak", FullPath = "a.pak", IsValid = true, Version = "-" }]) is null, "Unknown versions must not affect detection");
+Console.WriteLine("PASS: UE4 profile detection maps PAK versions and ignores invalid entries");
+
+var normalOptions = new WorkflowOptions { GameDirectory = ".", OutputDirectory = ".", GameProfile = "ue4.26", Workers = 8 };
+var lowOptions = new WorkflowOptions { GameDirectory = ".", OutputDirectory = ".", GameProfile = "ue4.26", Workers = 8, LowResource = true };
+Assert(WorkflowService.GetEffectiveWorkers(normalOptions) == 8, "Normal mode must keep the configured worker count");
+Assert(WorkflowService.GetEffectiveWorkers(lowOptions) == 2, "Low-resource mode must clamp workers to 2");
+Console.WriteLine("PASS: low-resource mode clamps worker parallelism");
+
 Console.WriteLine($"PASS: extraction order={string.Join(" -> ", ordered.Select(entry => entry.Name))}");
 Console.WriteLine($"PASS: throttled 50,000 UI log lines; dropped={firstBatch.Dropped}; remaining={firstBatch.Remaining}");
 

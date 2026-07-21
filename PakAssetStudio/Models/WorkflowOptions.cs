@@ -13,4 +13,5 @@ public sealed class WorkflowOptions
     public bool KeepGltf { get; init; }
     public bool Overwrite { get; init; }
     public int Workers { get; init; }
+    public bool LowResource { get; init; }
 }

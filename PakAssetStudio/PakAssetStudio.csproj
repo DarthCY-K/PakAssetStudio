@@ -28,4 +28,8 @@
     <Content Include="..\README.md" Link="README.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\tools\vc_runtime\vc_redist.x64.exe" Link="Prerequisites\vc_redist.x64.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
+  </ItemGroup>
 </Project>

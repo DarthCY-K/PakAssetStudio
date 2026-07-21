@@ -12,7 +12,8 @@ public sealed class ProcessRunner
         IEnumerable<string> arguments,
         string? workingDirectory,
         Action<string>? onLine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ProcessPriorityClass? priority = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -50,6 +51,17 @@ public sealed class ProcessRunner
         if (!process.Start())
         {
             throw new InvalidOperationException($"无法启动：{executable}");
+        }
+        if (priority.HasValue)
+        {
+            try
+            {
+                process.PriorityClass = priority.Value;
+            }
+            catch
+            {
+                // 进程可能已快速退出或系统拒绝调整优先级，忽略。
+            }
         }
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
