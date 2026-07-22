@@ -275,16 +275,30 @@
               <TextBlock Text="{l:Loc Steps_Title}" Style="{StaticResource CardTitle}" />
             </StackPanel>
 
-            <ui:ToggleSwitch x:Name="ExtractCheck" Content="{l:Loc Steps_Extract}" IsChecked="True" Margin="0,12,0,0" />
+            <TextBlock Text="{l:Loc Steps_PresetLabel}" Style="{StaticResource FieldLabel}" Margin="0,10,0,5" />
+            <ComboBox x:Name="PresetBox" SelectedIndex="0" SelectionChanged="PresetBox_SelectionChanged">
+              <ComboBoxItem Content="{l:Loc Steps_PresetFull}" />
+              <ComboBoxItem Content="{l:Loc Steps_PresetExtract}" />
+              <ComboBoxItem Content="{l:Loc Steps_PresetExport}" />
+              <ComboBoxItem Content="{l:Loc Steps_PresetCustom}" />
+            </ComboBox>
+
+            <TextBlock Text="{l:Loc Steps_GroupRun}" Style="{StaticResource FieldLabel}" />
+            <ui:ToggleSwitch x:Name="ExtractCheck" Content="{l:Loc Steps_Extract}" IsChecked="True" Margin="0,2,0,0"
+                             Checked="Option_Changed" Unchecked="Option_Changed" />
             <ui:ToggleSwitch x:Name="ModelsCheck" Content="{l:Loc Steps_Models}" IsChecked="True" Margin="0,8,0,0" Checked="Option_Changed" Unchecked="Option_Changed" />
             <ui:ToggleSwitch x:Name="TexturesCheck" Content="{l:Loc Steps_Textures}" IsChecked="True" Margin="0,8,0,0" Checked="Option_Changed" Unchecked="Option_Changed" />
             <ui:ToggleSwitch x:Name="FbxCheck" Content="{l:Loc Steps_Fbx}" IsChecked="True" Margin="0,8,0,0" Checked="Option_Changed" Unchecked="Option_Changed" />
-            <ui:ToggleSwitch x:Name="KeepGltfCheck" Content="{l:Loc Steps_KeepGltf}" Margin="0,8,0,0" />
             <ui:ToggleSwitch x:Name="MergeCheck" Content="{l:Loc Steps_Merge}" IsChecked="True" Margin="0,8,0,0"
-                             ToolTip="{l:Loc Steps_MergeTip}" />
+                             ToolTip="{l:Loc Steps_MergeTip}" Checked="Option_Changed" Unchecked="Option_Changed" />
+
+            <TextBlock Text="{l:Loc Steps_GroupOutput}" Style="{StaticResource FieldLabel}" />
+            <ui:ToggleSwitch x:Name="KeepGltfCheck" Content="{l:Loc Steps_KeepGltf}" Margin="0,2,0,0"
+                             Checked="Option_Changed" Unchecked="Option_Changed" />
             <ui:ToggleSwitch x:Name="DeleteCookedCheck" Content="{l:Loc Steps_DeleteCooked}" IsChecked="True" Margin="0,8,0,0"
-                             ToolTip="{l:Loc Steps_DeleteCookedTip}" />
-            <ui:ToggleSwitch x:Name="OverwriteCheck" Content="{l:Loc Steps_Overwrite}" Margin="0,8,0,0" />
+                             ToolTip="{l:Loc Steps_DeleteCookedTip}" Checked="Option_Changed" Unchecked="Option_Changed" />
+            <ui:ToggleSwitch x:Name="OverwriteCheck" Content="{l:Loc Steps_Overwrite}" Margin="0,8,0,0"
+                             Checked="Option_Changed" Unchecked="Option_Changed" />
           </StackPanel>
         </ui:Card>
 

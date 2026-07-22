@@ -22,6 +22,13 @@
     "Profile_LowResourceTip": "限制并行度，子进程以低优先级运行",
 
     "Steps_Title": "处理步骤",
+    "Steps_PresetLabel": "任务模式",
+    "Steps_PresetFull": "完整导出（推荐）",
+    "Steps_PresetExtract": "仅解包 PAK",
+    "Steps_PresetExport": "仅导出资源（不转 FBX）",
+    "Steps_PresetCustom": "自定义",
+    "Steps_GroupRun": "执行步骤",
+    "Steps_GroupOutput": "输出与清理",
     "Steps_Extract": "解包所有可读取的 PAK",
     "Steps_Models": "导出静态模型与骨骼模型",
     "Steps_Textures": "导出 PNG / HDR 贴图",

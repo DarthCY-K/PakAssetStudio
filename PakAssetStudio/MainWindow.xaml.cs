@@ -308,7 +308,53 @@ public partial class MainWindow : FluentWindow
             AppendLog(Text("Log_ProfileAmbiguous"), UiLogLevel.Warning);
     }
 
-    private void Option_Changed(object sender, RoutedEventArgs e) => UpdateOptionState();
+    private bool _applyingPreset;
+
+    private void PresetBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // InitializeComponent 阶段（IsLoaded 为 false）及程序化切换预设时不重复套用
+        if (_applyingPreset || !IsLoaded || ExtractCheck is null) return;
+        _applyingPreset = true;
+        switch (PresetBox.SelectedIndex)
+        {
+            case 0: // 完整导出
+                SetSteps(extract: true, models: true, textures: true, fbx: true,
+                    merge: true, keepGltf: false, deleteCooked: true, overwrite: false);
+                break;
+            case 1: // 仅解包 PAK：cooked 本身就是产物，不做清理
+                SetSteps(extract: true, models: false, textures: false, fbx: false,
+                    merge: false, keepGltf: false, deleteCooked: false, overwrite: false);
+                break;
+            case 2: // 仅导出资源（不转 FBX）
+                SetSteps(extract: true, models: true, textures: true, fbx: false,
+                    merge: true, keepGltf: false, deleteCooked: true, overwrite: false);
+                break;
+            // 3 = 自定义，不改动各开关
+        }
+        _applyingPreset = false;
+        UpdateOptionState();
+    }
+
+    private void SetSteps(bool extract, bool models, bool textures, bool fbx,
+        bool merge, bool keepGltf, bool deleteCooked, bool overwrite)
+    {
+        ExtractCheck.IsChecked = extract;
+        ModelsCheck.IsChecked = models;
+        TexturesCheck.IsChecked = textures;
+        FbxCheck.IsChecked = fbx;
+        MergeCheck.IsChecked = merge;
+        KeepGltfCheck.IsChecked = keepGltf;
+        DeleteCookedCheck.IsChecked = deleteCooked;
+        OverwriteCheck.IsChecked = overwrite;
+    }
+
+    private void Option_Changed(object sender, RoutedEventArgs e)
+    {
+        UpdateOptionState();
+        // 用户手动改动任一开关即视为自定义模式
+        if (!_applyingPreset && IsLoaded && PresetBox is not null)
+            PresetBox.SelectedIndex = 3;
+    }
 
     private void UnsupportedFilter_Changed(object sender, RoutedEventArgs e)
     {
