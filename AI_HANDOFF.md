@@ -58,6 +58,7 @@ AI_HANDOFF.md
 | `Services/WorkflowService.cs` | 解包、UModel 导出、目录复制与 FBX 转换 |
 | `Services/UiLogBuffer.cs` | 有界 UI 日志队列，避免大量输出堵塞 UI 线程 |
 | `tools/convert_gltf_to_fbx.py` | 通过 Assimp 转换并验证 FBX |
+| `tools/merge_gltf.py` | 将每个目录的分片 glTF 合并为单模型（仅 LOD0），可选转 FBX |
 
 ## 5. 工作流
 
@@ -66,8 +67,10 @@ AI_HANDOFF.md
 3. 跳过不可读取或非 Unreal PAK；UI 默认隐藏不支持的包，可用开关显示。
 4. 按基础包、optional 包、patch 包排序并依次解包到同一 cooked 目录。
 5. 调用 UModel，按用户选定的 UE4 profile 导出 glTF、贴图和材质描述。
-6. 可选复制导出目录，并用内置 Python + Assimp 将 glTF 转为 FBX。
-7. 完整日志写入磁盘；UI 只显示有界批次。
+6. 可选（默认开）用 `merge_gltf.py` 将每个目录的分片 glTF 合并为单模型（仅 LOD0），碎片合并后删除。
+7. 可选复制导出目录，并用内置 Python + Assimp 将 glTF 转为 FBX。
+8. 可选（默认开）删除 CookedAssets 中间产物，只保留导出结果。
+9. 完整日志写入磁盘；UI 只显示有界批次。
 
 低占用模式（`WorkflowOptions.LowResource`）：并行度钳制到 2，所有子进程以 `BelowNormal` 优先级运行（`ProcessRunner.RunAsync` 的 `priority` 参数）。
 
@@ -89,6 +92,7 @@ Tools/umodel/SDL2_64.dll
 Tools/assimp/assimp-vc143-mt.dll
 Tools/python/python.exe
 Tools/convert_gltf_to_fbx.py
+Tools/merge_gltf.py
 Prerequisites/vc_redist.x64.exe
 ```
 

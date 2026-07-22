@@ -27,6 +27,10 @@
     "Steps_Textures": "导出 PNG / HDR 贴图",
     "Steps_Fbx": "将 glTF 转换为 FBX",
     "Steps_KeepGltf": "保留原 glTF，FBX 写入单独副本",
+    "Steps_Merge": "合并分片模型（每个目录合并为一个 glTF）",
+    "Steps_MergeTip": "UModel 会把一个模型的部件导出成多个 glTF，合并后便于使用；仅保留 LOD0",
+    "Steps_DeleteCooked": "完成后删除 CookedAssets 中间产物",
+    "Steps_DeleteCookedTip": "导出结束后删除解包出的 cooked 目录，只保留 ExportedAssets / FbxAssets",
     "Steps_Overwrite": "覆盖已有输出文件",
 
     "Safety_Title": "安全提示",
@@ -108,8 +112,10 @@
 
     "Stage_Extracting": "解包 {0}",
     "Stage_Exporting": "导出模型和贴图",
+    "Stage_Merging": "合并分片模型",
     "Stage_CopyFbx": "复制 FBX 工作副本",
     "Stage_Converting": "转换并验证 FBX",
+    "Stage_DeletingCooked": "删除 CookedAssets 中间产物",
     "Stage_Done": "处理完成"
   }
 }

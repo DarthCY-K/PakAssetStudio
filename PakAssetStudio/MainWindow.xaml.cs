@@ -352,6 +352,8 @@ public partial class MainWindow : FluentWindow
     {
         if (FbxCheck is null || KeepGltfCheck is null) return;
         KeepGltfCheck.IsEnabled = FbxCheck.IsChecked == true;
+        if (MergeCheck is not null)
+            MergeCheck.IsEnabled = ModelsCheck.IsChecked == true;
     }
 
     private WorkflowOptions BuildOptions(string gameDirectory, string outputDirectory)
@@ -373,6 +375,8 @@ public partial class MainWindow : FluentWindow
             ExportTextures = TexturesCheck.IsChecked == true,
             ConvertToFbx = FbxCheck.IsChecked == true,
             KeepGltf = KeepGltfCheck.IsChecked == true,
+            MergeModels = MergeCheck.IsChecked == true,
+            DeleteCooked = DeleteCookedCheck.IsChecked == true,
             Overwrite = OverwriteCheck.IsChecked == true,
             Workers = workers > 0 ? workers : 8,
             LowResource = LowResourceCheck.IsChecked == true

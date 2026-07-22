@@ -29,6 +29,7 @@
     <Content Include="..\tools\assimp\Release\assimp-vc143-mt.dll" Link="Tools\assimp\assimp-vc143-mt.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <Content Include="..\tools\assimp\LICENSE" Link="Tools\assimp\LICENSE" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\tools\convert_gltf_to_fbx.py" Link="Tools\convert_gltf_to_fbx.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <Content Include="..\tools\merge_gltf.py" Link="Tools\merge_gltf.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <Content Include="..\tools\python\runtime\**\*" Link="Tools\python\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <Content Include="..\README.md" Link="README.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\THIRD-PARTY-NOTICES" Link="THIRD-PARTY-NOTICES" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

@@ -11,6 +11,8 @@ public sealed class WorkflowOptions
     public bool ExportTextures { get; init; }
     public bool ConvertToFbx { get; init; }
     public bool KeepGltf { get; init; }
+    public bool MergeModels { get; init; }
+    public bool DeleteCooked { get; init; }
     public bool Overwrite { get; init; }
     public int Workers { get; init; }
     public bool LowResource { get; init; }

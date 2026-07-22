@@ -27,6 +27,10 @@
     "Steps_Textures": "Export PNG / HDR textures",
     "Steps_Fbx": "Convert glTF to FBX",
     "Steps_KeepGltf": "Keep glTF; FBX to a separate copy",
+    "Steps_Merge": "Merge fragmented models (one glTF per folder)",
+    "Steps_MergeTip": "UModel exports each model part as a separate glTF; merging reassembles them. Keeps LOD0 only",
+    "Steps_DeleteCooked": "Delete CookedAssets when done",
+    "Steps_DeleteCookedTip": "Removes the unpacked cooked files after export, keeping only ExportedAssets / FbxAssets",
     "Steps_Overwrite": "Overwrite existing output files",
 
     "Safety_Title": "Safety",
@@ -108,8 +112,10 @@
 
     "Stage_Extracting": "Extracting {0}",
     "Stage_Exporting": "Exporting models & textures",
+    "Stage_Merging": "Merging fragmented models",
     "Stage_CopyFbx": "Copying FBX working copy",
     "Stage_Converting": "Converting & validating FBX",
+    "Stage_DeletingCooked": "Deleting CookedAssets intermediates",
     "Stage_Done": "Done"
   }
 }

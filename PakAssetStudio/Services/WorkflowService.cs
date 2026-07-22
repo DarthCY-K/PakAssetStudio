@@ -10,6 +10,7 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
     private readonly string _umodelPath = Path.Combine(AppContext.BaseDirectory, "Tools", "umodel", "umodel_64.exe");
     private readonly string _assimpPath = Path.Combine(AppContext.BaseDirectory, "Tools", "assimp", "assimp-vc143-mt.dll");
     private readonly string _converterPath = Path.Combine(AppContext.BaseDirectory, "Tools", "convert_gltf_to_fbx.py");
+    private readonly string _mergePath = Path.Combine(AppContext.BaseDirectory, "Tools", "merge_gltf.py");
     private readonly string _pythonPath = Path.Combine(AppContext.BaseDirectory, "Tools", "python", "python.exe");
 
     public async Task RunAsync(
@@ -99,6 +100,25 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
                 if (result.ExitCode != 0) throw new InvalidOperationException("UModel 导出失败，请查看日志。");
             }
 
+            if (options.MergeModels && options.ExportModels)
+            {
+                if (!Directory.Exists(exportDirectory))
+                    throw new DirectoryNotFoundException($"找不到导出目录：{exportDirectory}");
+                EnsureFile(_mergePath, "缺少 glTF 合并脚本");
+                EnsureFile(_pythonPath, "缺少内置 Python 运行时");
+
+                progress(70, LocalizationService.Text("Stage_Merging"));
+                WriteLog("合并分片 glTF 模型（每个目录合并为一个模型，仅保留 LOD0）。", UiLogLevel.Stage);
+                var result = await processRunner.RunAsync(
+                    _pythonPath,
+                    new[] { _mergePath, exportDirectory },
+                    AppContext.BaseDirectory,
+                    line => WriteLog(line),
+                    cancellationToken,
+                    priority);
+                if (result.ExitCode != 0) throw new InvalidOperationException("glTF 合并失败，请查看日志。");
+            }
+
             if (options.ConvertToFbx)
             {
                 if (!Directory.Exists(exportDirectory))
@@ -131,6 +151,13 @@ public sealed class WorkflowService(ProcessRunner processRunner, PakToolService 
                     if (parsed.HasValue) progress(85 + parsed.Value * 14, LocalizationService.Text("Stage_Converting"));
                 }, cancellationToken, priority);
                 if (result.ExitCode != 0) throw new InvalidOperationException("部分 FBX 转换失败，原 glTF 已保留。请查看失败清单。");
+            }
+
+            if (options.DeleteCooked && Directory.Exists(cookedDirectory))
+            {
+                progress(99, LocalizationService.Text("Stage_DeletingCooked"));
+                WriteLog("删除 CookedAssets 中间产物，仅保留导出结果。", UiLogLevel.Stage);
+                await Task.Run(() => Directory.Delete(cookedDirectory, recursive: true), cancellationToken);
             }
 
             progress(100, LocalizationService.Text("Stage_Done"));

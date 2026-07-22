@@ -4,6 +4,7 @@
 **/publish/
 artifacts/
 releases/
+__pycache__/
 
 # IDE and user settings
 .vs/

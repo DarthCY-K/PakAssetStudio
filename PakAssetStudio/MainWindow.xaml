@@ -279,7 +279,11 @@
             <ui:ToggleSwitch x:Name="ModelsCheck" Content="{l:Loc Steps_Models}" IsChecked="True" Margin="0,8,0,0" Checked="Option_Changed" Unchecked="Option_Changed" />
             <ui:ToggleSwitch x:Name="TexturesCheck" Content="{l:Loc Steps_Textures}" IsChecked="True" Margin="0,8,0,0" Checked="Option_Changed" Unchecked="Option_Changed" />
             <ui:ToggleSwitch x:Name="FbxCheck" Content="{l:Loc Steps_Fbx}" IsChecked="True" Margin="0,8,0,0" Checked="Option_Changed" Unchecked="Option_Changed" />
-            <ui:ToggleSwitch x:Name="KeepGltfCheck" Content="{l:Loc Steps_KeepGltf}" IsChecked="True" Margin="0,8,0,0" />
+            <ui:ToggleSwitch x:Name="KeepGltfCheck" Content="{l:Loc Steps_KeepGltf}" Margin="0,8,0,0" />
+            <ui:ToggleSwitch x:Name="MergeCheck" Content="{l:Loc Steps_Merge}" IsChecked="True" Margin="0,8,0,0"
+                             ToolTip="{l:Loc Steps_MergeTip}" />
+            <ui:ToggleSwitch x:Name="DeleteCookedCheck" Content="{l:Loc Steps_DeleteCooked}" IsChecked="True" Margin="0,8,0,0"
+                             ToolTip="{l:Loc Steps_DeleteCookedTip}" />
             <ui:ToggleSwitch x:Name="OverwriteCheck" Content="{l:Loc Steps_Overwrite}" Margin="0,8,0,0" />
           </StackPanel>
         </ui:Card>
