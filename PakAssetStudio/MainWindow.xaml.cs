@@ -27,14 +27,15 @@ public partial class MainWindow : FluentWindow
     private readonly PakToolService _pakToolService;
     private readonly WorkflowService _workflowService;
     private CancellationTokenSource? _cancellation;
-    private readonly UiLogBuffer _uiLogs = new();
+    private readonly UiLogBuffer _uiLogs = new(count => TextFormat("Log_UiOmitted", count));
     private readonly DispatcherTimer _logFlushTimer;
     private bool _isBusy;
     private string? _lastScannedDirectory;
     private bool _profileManuallySet;
     private bool _updatingProfile;
     private bool _selectingLanguage;
-    private (int Total, int Valid, long Bytes)? _scanSummary;
+    private string? _detectedProfileRange;
+    private (int Total, int Eligible, long Bytes)? _scanSummary;
     private readonly ICollectionView _pakView;
 
     public ObservableCollection<PakEntry> PakEntries { get; } = [];
@@ -42,6 +43,9 @@ public partial class MainWindow : FluentWindow
     public MainWindow()
     {
         InitializeComponent();
+        var workArea = SystemParameters.WorkArea;
+        Width = Math.Min(Width, Math.Max(MinWidth, workArea.Width - 16));
+        Height = Math.Min(Height, Math.Max(MinHeight, workArea.Height - 16));
         DataContext = this;
         _pakToolService = new PakToolService(_processRunner);
         _workflowService = new WorkflowService(_processRunner, _pakToolService);
@@ -58,7 +62,7 @@ public partial class MainWindow : FluentWindow
         PakEntries.CollectionChanged += (_, _) => UpdatePakEmptyState();
         // 默认隐藏不支持的 PAK，由“显示不支持的包”开关控制
         _pakView = CollectionViewSource.GetDefaultView(PakEntries);
-        _pakView.Filter = entry => ShowUnsupportedCheck.IsChecked == true || ((PakEntry)entry).IsValid;
+        _pakView.Filter = entry => ShowUnsupportedCheck.IsChecked == true || ((PakEntry)entry).CanAttemptExtraction;
 
         _selectingLanguage = true;
         LanguageBox.ItemsSource = Instance.AvailableLanguages;
@@ -71,7 +75,7 @@ public partial class MainWindow : FluentWindow
         UpdateOptionState();
     }
 
-    // 显示 InformationalVersion：正式版为 v0.2.0；预发布版本附带短提交号，如 v0.2.0-alpha.0.3+abc1234
+    // 显示 InformationalVersion；预发布版本附带短提交号。
     private static string GetDisplayVersion()
     {
         var info = System.Reflection.Assembly.GetExecutingAssembly()
@@ -90,10 +94,7 @@ public partial class MainWindow : FluentWindow
         if (path is null) return;
         GameDirectoryBox.Text = path;
         if (string.IsNullOrWhiteSpace(OutputDirectoryBox.Text))
-        {
-            var name = new DirectoryInfo(path).Name + "_Assets";
-            OutputDirectoryBox.Text = Path.Combine(Directory.GetParent(path)?.FullName ?? path, name);
-        }
+            OutputDirectoryBox.Text = SuggestOutputDirectory(path);
     }
 
     private void BrowseOutput_Click(object sender, RoutedEventArgs e)
@@ -118,32 +119,44 @@ public partial class MainWindow : FluentWindow
 
         SetBusy(true, Text("Status_Scanning"));
         TaskProgress.Value = 0;
+        _lastScannedDirectory = null;
+        _scanSummary = null;
+        SetProfileRangeHint(null);
+        WorkspaceSummaryText.Text = Text("Workspace_SummaryEmpty");
+        if (!_profileManuallySet) ClearAutomaticProfile();
         PakEntries.Clear();
         AppendLog(TextFormat("Log_Scanning", root), UiLogLevel.Stage);
-        _cancellation = new CancellationTokenSource();
+        _cancellation?.Dispose();
+        var scanCancellation = new CancellationTokenSource();
+        _cancellation = scanCancellation;
 
         try
         {
+            var priority = LowResourceCheck.IsChecked == true ? ProcessPriorityClass.BelowNormal : (ProcessPriorityClass?)null;
             var entries = await _pakToolService.ScanAsync(root, EmptyToNull(AesKeyBox.Password), (done, total) =>
             {
                 TaskProgress.Value = total == 0 ? 0 : done * 100d / total;
                 StageText.Text = TextFormat("Status_ScanProgress", done, total);
-            }, _cancellation.Token);
+            }, scanCancellation.Token, priority);
             foreach (var entry in entries) PakEntries.Add(entry);
-            _lastScannedDirectory = Path.GetFullPath(root);
 
-            var valid = entries.Count(entry => entry.IsValid);
-            var bytes = entries.Where(entry => entry.IsValid).Sum(entry => entry.SizeBytes);
-            _scanSummary = (entries.Count, valid, bytes);
+            var eligible = entries.Count(entry => entry.CanAttemptExtraction);
+            var bytes = entries.Where(entry => entry.CanAttemptExtraction).Sum(entry => entry.SizeBytes);
+            _scanSummary = (entries.Count, eligible, bytes);
             UpdateScanSummaryText();
-            AppendLog(TextFormat("Log_ScanDone", valid, entries.Count), UiLogLevel.Stage);
+            AppendLog(TextFormat("Log_ScanDone", eligible, entries.Count), UiLogLevel.Stage);
+            foreach (var entry in entries.Where(entry => !entry.CanAttemptExtraction).Take(20))
+                AppendLog(TextFormat("Log_PakSkipped", entry.Name, entry.ScanError ?? entry.Status), UiLogLevel.Warning);
+            if (entries.Count(entry => !entry.CanAttemptExtraction) > 20)
+                AppendLog(TextFormat("Log_PakSkippedMore", entries.Count(entry => !entry.CanAttemptExtraction) - 20), UiLogLevel.Warning);
             ApplyDetectedProfile(entries);
+            _lastScannedDirectory = Path.GetFullPath(root);
 
             if (entries.Count == 0 && showNoPakMessage)
                 MessageBox.Show(Text("Dialog_NoPaks"), Text("Dialog_ScanDoneTitle"), MessageBoxButton.OK, MessageBoxImage.Information);
-            else if (valid == 0 && showNoPakMessage)
+            else if (eligible == 0 && showNoPakMessage)
                 MessageBox.Show(Text("Dialog_NoValidPaks"), Text("Dialog_CannotReadTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
-            return valid > 0;
+            return eligible > 0;
         }
         catch (OperationCanceledException)
         {
@@ -158,12 +171,16 @@ public partial class MainWindow : FluentWindow
         }
         finally
         {
+            if (ReferenceEquals(_cancellation, scanCancellation))
+                _cancellation = null;
+            scanCancellation.Dispose();
             SetBusy(false, Text("App_Ready"));
         }
     }
 
     private async void Start_Click(object sender, RoutedEventArgs e)
     {
+        if (_isBusy) return;
         var gameDirectory = GameDirectoryBox.Text.Trim();
         var outputDirectory = OutputDirectoryBox.Text.Trim();
         if (!Directory.Exists(gameDirectory))
@@ -176,17 +193,25 @@ public partial class MainWindow : FluentWindow
             MessageBox.Show(Text("Dialog_ChooseOutput"), Text("Dialog_InvalidPathTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        var normalizedGame = Path.GetFullPath(gameDirectory);
-        var normalizedOutput = Path.GetFullPath(outputDirectory);
-        if (IsSameOrChild(normalizedOutput, normalizedGame))
+        string normalizedSelectedGame;
+        string normalizedProtectedGame;
+        string normalizedOutput;
+        try
+        {
+            normalizedSelectedGame = PathSafety.ResolvePhysicalPath(gameDirectory);
+            normalizedProtectedGame = PathSafety.ResolvePhysicalPath(PathSafety.GetProtectedGameDirectory(gameDirectory));
+            normalizedOutput = PathSafety.ResolvePhysicalPath(outputDirectory);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(TextFormat("Dialog_InvalidPathDetail", ex.Message), Text("Dialog_InvalidPathTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (PathSafety.IsSameOrChild(normalizedOutput, normalizedSelectedGame) ||
+            PathSafety.IsSameOrChild(normalizedOutput, normalizedProtectedGame))
         {
             MessageBox.Show(Text("Dialog_UnsafeOutput"), Text("Dialog_UnsafeOutputTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
-        }
-
-        if (_lastScannedDirectory is null || !Path.GetFullPath(gameDirectory).Equals(_lastScannedDirectory, StringComparison.OrdinalIgnoreCase))
-        {
-            if (!await ScanPaksAsync(showNoPakMessage: true)) return;
         }
 
         var options = BuildOptions(gameDirectory, outputDirectory);
@@ -195,31 +220,95 @@ public partial class MainWindow : FluentWindow
             MessageBox.Show(Text("Dialog_NoSteps"), Text("Dialog_NoStepsTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-
-        try
+        if (options.ConvertToFbx && options.ExportTextures && !options.ExportModels)
         {
-            var (required, free) = WorkflowService.EstimateDiskSpace(PakEntries, options);
-            if (free < required)
+            MessageBox.Show(Text("Error_FbxRequiresModels"), Text("Dialog_InvalidStepsTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (options.ExtractPaks)
+        {
+            if (_lastScannedDirectory is null || !Path.GetFullPath(gameDirectory).Equals(_lastScannedDirectory, StringComparison.OrdinalIgnoreCase))
             {
-                var answer = MessageBox.Show(
-                    TextFormat("Dialog_DiskSpace", FormatBytes(required), FormatBytes(free)),
-                    Text("Dialog_DiskSpaceTitle"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (!await ScanPaksAsync(showNoPakMessage: true)) return;
+            }
+            if (!PakEntries.Any(entry => entry.CanAttemptExtraction))
+            {
+                MessageBox.Show(Text("Dialog_NoValidPaks"), Text("Dialog_CannotReadTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            var skipped = PakEntries.Count(entry => !entry.CanAttemptExtraction);
+            if (skipped > 0)
+            {
+                var answer = MessageBox.Show(TextFormat("Dialog_ConfirmSkippedPaks", skipped), Text("Dialog_ConfirmSkippedPaksTitle"),
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning);
                 if (answer != MessageBoxResult.Yes) return;
             }
         }
-        catch (Exception ex)
+
+        // 扫描可能刚刚自动填写了唯一可确定的 profile，因此在这里重新读取界面选项。
+        options = BuildOptions(gameDirectory, outputDirectory);
+        if ((options.ExportModels || options.ExportTextures) && string.IsNullOrWhiteSpace(options.GameProfile))
         {
-            MessageBox.Show(TextFormat("Dialog_DiskCheckFailed", ex.Message), Text("Dialog_DiskCheckTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(Text("Dialog_ChooseProfile"), Text("Dialog_ChooseProfileTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
+        }
+        if (options.Overwrite)
+        {
+            var answer = MessageBox.Show(
+                TextFormat("Dialog_ConfirmOverwrite", options.OutputDirectory),
+                Text("Dialog_ConfirmOverwriteTitle"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes) return;
+        }
+
+        _cancellation?.Dispose();
+        var diskCheckCancellation = new CancellationTokenSource();
+        _cancellation = diskCheckCancellation;
+        SetBusy(true, Text("Status_CheckingDisk"));
+        try
+        {
+            try
+            {
+                var (required, free) = await Task.Run(
+                    () => WorkflowService.EstimateDiskSpace(PakEntries, options, diskCheckCancellation.Token),
+                    diskCheckCancellation.Token);
+                if (free < required)
+                {
+                    var answer = MessageBox.Show(
+                        TextFormat("Dialog_DiskSpace", FormatBytes(required), FormatBytes(free)),
+                        Text("Dialog_DiskSpaceTitle"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                    if (answer != MessageBoxResult.Yes) return;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                StageText.Text = Text("Status_TaskCancelled");
+                return;
+            }
+            catch (Exception ex)
+            {
+                var answer = MessageBox.Show(
+                    TextFormat("Dialog_DiskCheckFailedContinue", ex.Message),
+                    Text("Dialog_DiskCheckTitle"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (answer != MessageBoxResult.Yes) return;
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_cancellation, diskCheckCancellation))
+                _cancellation = null;
+            diskCheckCancellation.Dispose();
+            SetBusy(false, Text("App_Ready"));
         }
 
         _uiLogs.Clear();
         LogBox.Document.Blocks.Clear();
         SetBusy(true, Text("Status_Preparing"));
-        _cancellation = new CancellationTokenSource();
+        _cancellation?.Dispose();
+        var workflowCancellation = new CancellationTokenSource();
+        _cancellation = workflowCancellation;
         try
         {
-            await _workflowService.RunAsync(PakEntries.ToList(), options, AppendLog, UpdateProgress, _cancellation.Token);
+            await _workflowService.RunAsync(PakEntries.ToList(), options, AppendLog, UpdateProgress, workflowCancellation.Token);
             HeaderStatusDot.Fill = new SolidColorBrush(Color.FromRgb(99, 199, 168));
             MessageBox.Show(Text("Dialog_TaskDone"), Text("Dialog_TaskDoneTitle"), MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -236,6 +325,9 @@ public partial class MainWindow : FluentWindow
         }
         finally
         {
+            if (ReferenceEquals(_cancellation, workflowCancellation))
+                _cancellation = null;
+            workflowCancellation.Dispose();
             SetBusy(false, Text("App_Ready"));
         }
     }
@@ -250,8 +342,11 @@ public partial class MainWindow : FluentWindow
     private void OpenOutput_Click(object sender, RoutedEventArgs e)
     {
         var path = OutputDirectoryBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(path)) return;
-        Directory.CreateDirectory(path);
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+        {
+            MessageBox.Show(Text("Dialog_OutputMissing"), Text("Dialog_OutputMissingTitle"), MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         Process.Start(new ProcessStartInfo("explorer.exe", path) { UseShellExecute = true });
     }
 
@@ -269,16 +364,48 @@ public partial class MainWindow : FluentWindow
         var path = paths[0];
         GameDirectoryBox.Text = Directory.Exists(path) ? path : Path.GetDirectoryName(path) ?? path;
         if (string.IsNullOrWhiteSpace(OutputDirectoryBox.Text))
-            OutputDirectoryBox.Text = Path.Combine(Path.GetDirectoryName(GameDirectoryBox.Text) ?? GameDirectoryBox.Text, "ExtractedAssets");
+            OutputDirectoryBox.Text = SuggestOutputDirectory(GameDirectoryBox.Text);
     }
 
     private void PathBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (ReferenceEquals(sender, GameDirectoryBox))
         {
-            _lastScannedDirectory = null;
+            InvalidateScan();
             _profileManuallySet = false;
+            if (GameProfileBox is not null)
+            {
+                _updatingProfile = true;
+                GameProfileBox.Text = string.Empty;
+                _updatingProfile = false;
+                ProfileAutoHint.Visibility = Visibility.Collapsed;
+            }
         }
+    }
+
+    private void AesKeyBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        InvalidateScan();
+        if (!_profileManuallySet) ClearAutomaticProfile();
+    }
+
+    private void ClearAutomaticProfile()
+    {
+        _updatingProfile = true;
+        GameProfileBox.Text = string.Empty;
+        _updatingProfile = false;
+        ProfileAutoHint.Visibility = Visibility.Collapsed;
+    }
+
+    private void InvalidateScan()
+    {
+        _lastScannedDirectory = null;
+        _scanSummary = null;
+        PakEntries.Clear();
+        SetProfileRangeHint(null);
+        if (WorkspaceSummaryText is not null)
+            WorkspaceSummaryText.Text = Text("Workspace_SummaryEmpty");
     }
 
     private void GameProfileBox_Changed(object sender, RoutedEventArgs e)
@@ -290,8 +417,22 @@ public partial class MainWindow : FluentWindow
 
     private void ApplyDetectedProfile(IReadOnlyList<PakEntry> entries)
     {
-        var detected = Ue4ProfileDetector.Detect(entries);
-        if (detected is null) return;
+        var detection = Ue4ProfileDetector.DetectDetailed(entries);
+        if (detection is null)
+        {
+            SetProfileRangeHint(null);
+            return;
+        }
+        SetProfileRangeHint(detection.Range);
+        if (detection.IsAmbiguous || detection.SuggestedProfile is null)
+        {
+            if (!_profileManuallySet) ClearAutomaticProfile();
+            ProfileAutoHint.Visibility = Visibility.Collapsed;
+            AppendLog(TextFormat("Log_ProfileRange", detection.Range), UiLogLevel.Warning);
+            return;
+        }
+
+        var detected = detection.SuggestedProfile;
         if (_profileManuallySet)
         {
             if (!GameProfileBox.Text.Trim().Equals(detected, StringComparison.OrdinalIgnoreCase))
@@ -304,8 +445,26 @@ public partial class MainWindow : FluentWindow
         _updatingProfile = false;
         ProfileAutoHint.Visibility = Visibility.Visible;
         AppendLog(TextFormat("Log_ProfileDetected", detected), UiLogLevel.Stage);
-        if (entries.Any(entry => entry.IsValid && entry.Version.Trim().Equals("V11", StringComparison.OrdinalIgnoreCase)))
-            AppendLog(Text("Log_ProfileAmbiguous"), UiLogLevel.Warning);
+    }
+
+    private void SetProfileRangeHint(string? range)
+    {
+        _detectedProfileRange = string.IsNullOrWhiteSpace(range) ? null : range;
+        UpdateProfileRangeHint();
+    }
+
+    private void UpdateProfileRangeHint()
+    {
+        if (ProfileRangeHint is null) return;
+        if (_detectedProfileRange is null)
+        {
+            ProfileRangeHint.Text = string.Empty;
+            ProfileRangeHint.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        ProfileRangeHint.Text = TextFormat("Profile_RangeHint", _detectedProfileRange);
+        ProfileRangeHint.Visibility = Visibility.Visible;
     }
 
     private bool _applyingPreset;
@@ -317,9 +476,9 @@ public partial class MainWindow : FluentWindow
         _applyingPreset = true;
         switch (PresetBox.SelectedIndex)
         {
-            case 0: // 完整导出
+            case 0: // 完整导出：自动合并不具备可靠的资产关系信息，默认关闭
                 SetSteps(extract: true, models: true, textures: true, fbx: true,
-                    merge: true, keepGltf: false, deleteCooked: true, overwrite: false);
+                    merge: false, keepGltf: false, deleteCooked: true, overwrite: false);
                 break;
             case 1: // 仅解包 PAK：cooked 本身就是产物，不做清理
                 SetSteps(extract: true, models: false, textures: false, fbx: false,
@@ -327,9 +486,9 @@ public partial class MainWindow : FluentWindow
                 break;
             case 2: // 仅导出资源（不转 FBX）
                 SetSteps(extract: true, models: true, textures: true, fbx: false,
-                    merge: true, keepGltf: false, deleteCooked: true, overwrite: false);
+                    merge: false, keepGltf: false, deleteCooked: true, overwrite: false);
                 break;
-            // 3 = 自定义，不改动各开关
+                // 3 = 自定义，不改动各开关
         }
         _applyingPreset = false;
         UpdateOptionState();
@@ -373,7 +532,7 @@ public partial class MainWindow : FluentWindow
     private void UpdateScanSummaryText()
     {
         if (_scanSummary is not { } summary) return;
-        WorkspaceSummaryText.Text = TextFormat("Summary_ScanResult", summary.Total, summary.Valid, FormatBytes(summary.Bytes));
+        WorkspaceSummaryText.Text = TextFormat("Summary_ScanResult", summary.Total, summary.Eligible, FormatBytes(summary.Bytes));
     }
 
     private void LanguageBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -386,6 +545,7 @@ public partial class MainWindow : FluentWindow
     {
         UpdatePakEmptyState();
         UpdateScanSummaryText();
+        UpdateProfileRangeHint();
         _pakView.Refresh();
         if (!_isBusy)
         {
@@ -396,10 +556,19 @@ public partial class MainWindow : FluentWindow
 
     private void UpdateOptionState()
     {
-        if (FbxCheck is null || KeepGltfCheck is null) return;
-        KeepGltfCheck.IsEnabled = FbxCheck.IsChecked == true;
+        if (FbxCheck is null || KeepGltfCheck is null || ModelsCheck is null || TexturesCheck is null) return;
+        var exportsTexturesWithoutModels = TexturesCheck.IsChecked == true && ModelsCheck.IsChecked != true;
+        if (exportsTexturesWithoutModels && FbxCheck.IsChecked == true)
+            FbxCheck.IsChecked = false;
+        FbxCheck.IsEnabled = !exportsTexturesWithoutModels;
+        var mergeWithFbx = FbxCheck.IsChecked == true && MergeCheck?.IsChecked == true;
+        if (mergeWithFbx && KeepGltfCheck.IsChecked != true)
+            KeepGltfCheck.IsChecked = true;
+        KeepGltfCheck.IsEnabled = FbxCheck.IsChecked == true && !mergeWithFbx;
         if (MergeCheck is not null)
             MergeCheck.IsEnabled = ModelsCheck.IsChecked == true;
+        if (DeleteCookedCheck is not null)
+            DeleteCookedCheck.IsEnabled = ModelsCheck.IsChecked == true || TexturesCheck.IsChecked == true;
     }
 
     private WorkflowOptions BuildOptions(string gameDirectory, string outputDirectory)
@@ -414,15 +583,17 @@ public partial class MainWindow : FluentWindow
         {
             GameDirectory = Path.GetFullPath(gameDirectory),
             OutputDirectory = Path.GetFullPath(outputDirectory),
-            GameProfile = string.IsNullOrWhiteSpace(profile) ? "ue4.26" : profile,
+            GameProfile = profile,
             AesKey = EmptyToNull(AesKeyBox.Password),
             ExtractPaks = ExtractCheck.IsChecked == true,
             ExportModels = ModelsCheck.IsChecked == true,
             ExportTextures = TexturesCheck.IsChecked == true,
             ConvertToFbx = FbxCheck.IsChecked == true,
-            KeepGltf = KeepGltfCheck.IsChecked == true,
-            MergeModels = MergeCheck.IsChecked == true,
-            DeleteCooked = DeleteCookedCheck.IsChecked == true,
+            KeepGltf = FbxCheck.IsChecked == true &&
+                (KeepGltfCheck.IsChecked == true || (ModelsCheck.IsChecked == true && MergeCheck.IsChecked == true)),
+            MergeModels = ModelsCheck.IsChecked == true && MergeCheck.IsChecked == true,
+            DeleteCooked = (ModelsCheck.IsChecked == true || TexturesCheck.IsChecked == true) &&
+                DeleteCookedCheck.IsChecked == true,
             Overwrite = OverwriteCheck.IsChecked == true,
             Workers = workers > 0 ? workers : 8,
             LowResource = LowResourceCheck.IsChecked == true
@@ -437,6 +608,20 @@ public partial class MainWindow : FluentWindow
         CancelButton.IsEnabled = busy;
         GameDirectoryBox.IsEnabled = !busy;
         OutputDirectoryBox.IsEnabled = !busy;
+        GameProfileBox.IsEnabled = !busy;
+        WorkersBox.IsEnabled = !busy;
+        AesKeyBox.IsEnabled = !busy;
+        LowResourceCheck.IsEnabled = !busy;
+        PresetBox.IsEnabled = !busy;
+        ExtractCheck.IsEnabled = !busy;
+        ModelsCheck.IsEnabled = !busy;
+        TexturesCheck.IsEnabled = !busy;
+        FbxCheck.IsEnabled = !busy && !(TexturesCheck.IsChecked == true && ModelsCheck.IsChecked != true);
+        MergeCheck.IsEnabled = !busy && ModelsCheck.IsChecked == true;
+        KeepGltfCheck.IsEnabled = !busy && FbxCheck.IsChecked == true && MergeCheck.IsChecked != true;
+        DeleteCookedCheck.IsEnabled = !busy &&
+            (ModelsCheck.IsChecked == true || TexturesCheck.IsChecked == true);
+        OverwriteCheck.IsEnabled = !busy;
         HeaderStatusText.Text = status;
         if (!busy && TaskProgress.Value < 100) TaskProgress.Value = 0;
     }
@@ -536,6 +721,17 @@ public partial class MainWindow : FluentWindow
         _logFlushTimer.Stop();
     }
 
+    private static string SuggestOutputDirectory(string gameDirectory)
+    {
+        var protectedRoot = PathSafety.GetProtectedGameDirectory(gameDirectory);
+        var gameName = new DirectoryInfo(protectedRoot).Name;
+        if (string.IsNullOrWhiteSpace(gameName)) gameName = "Game";
+        var baseDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PakAssetStudio");
+        return Path.Combine(baseDirectory, gameName + "_Assets");
+    }
+
     private static string? ChooseFolder(string description, string current)
     {
         using var dialog = new System.Windows.Forms.FolderBrowserDialog
@@ -549,13 +745,6 @@ public partial class MainWindow : FluentWindow
     }
 
     private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private static bool IsSameOrChild(string candidate, string parent)
-    {
-        var parentWithSeparator = Path.TrimEndingDirectorySeparator(parent) + Path.DirectorySeparatorChar;
-        return Path.TrimEndingDirectorySeparator(candidate).Equals(Path.TrimEndingDirectorySeparator(parent), StringComparison.OrdinalIgnoreCase)
-            || candidate.StartsWith(parentWithSeparator, StringComparison.OrdinalIgnoreCase);
-    }
 
     private static string FormatBytes(long bytes)
     {

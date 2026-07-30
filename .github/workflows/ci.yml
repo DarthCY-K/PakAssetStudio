@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  windows-build-test:
+    runs-on: windows-latest
+    env:
+      ASSIMP_TEST_DLL: ${{ github.workspace }}\tools\assimp\Release\assimp-vc143-mt.dll
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Check changed files for whitespace errors
+        shell: pwsh
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          $baseSha = if ($env:PR_BASE_SHA) { $env:PR_BASE_SHA } else { $env:PUSH_BASE_SHA }
+          if (-not $baseSha -or $baseSha -match '^0+$') {
+            git diff-tree --check --root --no-commit-id -r HEAD
+          }
+          else {
+            git diff --check "$baseSha..HEAD"
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Whitespace quality check failed' }
+
+      - name: Check .NET formatting
+        run: dotnet format .\PakAssetStudio.slnx whitespace --verify-no-changes --verbosity minimal
+
+      - name: Test .NET code
+        run: dotnet test .\PakAssetStudio.slnx -c Release --logger "trx;LogFileName=tests.trx"
+
+      - name: Test asset scripts on Python 3.13
+        run: python -m unittest discover -s .\tools\tests -v
+
+      - name: Test asset scripts on bundled Python
+        run: .\tools\python\runtime\python.exe -m unittest discover -s .\tools\tests -v
+
+      - name: Resolve release version
+        shell: pwsh
+        env:
+          GIT_REF_NAME: ${{ github.ref_name }}
+          GIT_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          $version = ''
+          if ($env:GIT_REF_TYPE -eq 'tag') {
+            if ($env:GIT_REF_NAME -notmatch '^v(?<version>(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$') {
+              throw "Release tag '$($env:GIT_REF_NAME)' must be v followed by a semantic version, for example v0.5.0."
+            }
+            $version = $Matches['version']
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "EXPECTED_VERSION=$version" -Encoding utf8
+
+      - name: Publish Windows x64
+        shell: pwsh
+        run: |
+          $arguments = @(
+            'publish', '.\PakAssetStudio\PakAssetStudio.csproj',
+            '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true',
+            '-p:PublishSingleFile=true', '-o', '.\artifacts\publish\win-x64'
+          )
+          if ($env:EXPECTED_VERSION) {
+            $arguments += "-p:MinVerVersionOverride=$($env:EXPECTED_VERSION)"
+            $arguments += '-p:IncludeSourceRevisionInInformationalVersion=false'
+          }
+          dotnet @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed' }
+
+      - name: Write third-party version and hash manifest
+        shell: pwsh
+        run: .\scripts\Write-ThirdPartyManifest.ps1 -PublishDirectory .\artifacts\publish\win-x64
+
+      - name: Verify portable layout
+        shell: pwsh
+        run: |
+          $arguments = @{ PublishDirectory = '.\artifacts\publish\win-x64' }
+          if ($env:EXPECTED_VERSION) { $arguments.ExpectedVersion = $env:EXPECTED_VERSION }
+          .\scripts\Test-PublishLayout.ps1 @arguments
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PakAssetStudio-win-x64
+          path: artifacts/publish/win-x64
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows-build-test
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: PakAssetStudio-win-x64
+          path: publish
+
+      - name: Verify release binary version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $expectedVersion = $env:RELEASE_TAG.Substring(1)
+          .\scripts\Test-PublishLayout.ps1 -PublishDirectory .\publish -ExpectedVersion $expectedVersion
+
+      - name: Create ZIP and SHA-256
+        shell: pwsh
+        run: |
+          $name = "PakAssetStudio-${{ github.ref_name }}-win-x64.zip"
+          $checksum = "$name.sha256"
+          foreach ($staleArtifact in @($name, $checksum)) {
+            if (Test-Path $staleArtifact -PathType Leaf) {
+              Remove-Item $staleArtifact -Force
+            }
+          }
+          try {
+            Compress-Archive -Path '.\publish\*' -DestinationPath $name -CompressionLevel Optimal
+            $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $name" | Set-Content $checksum -Encoding ascii
+          }
+          catch {
+            Remove-Item $name, $checksum -Force -ErrorAction SilentlyContinue
+            throw
+          }
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $name = "PakAssetStudio-${{ github.ref_name }}-win-x64.zip"
+          gh release create '${{ github.ref_name }}' $name "$name.sha256" `
+            --verify-tag --generate-notes --title '${{ github.ref_name }}'

@@ -33,6 +33,14 @@ def error_string(dll):
     return value.decode('utf-8', errors='replace') if value else 'unknown Assimp error'
 
 
+def is_valid_fbx(dll, path):
+    scene = dll.aiImportFile(os.fsencode(path), 0)
+    if not scene:
+        return False
+    dll.aiReleaseImport(scene)
+    return True
+
+
 def write_without_empty_primitives(source, destination):
     document = json.loads(source.read_text(encoding='utf-8'))
     removed = 0
@@ -115,21 +123,18 @@ def write_without_empty_primitives(source, destination):
 
 
 def convert_one(arguments):
-    source_value, dll_path = arguments
+    source_value, dll_path, overwrite = arguments
     source = Path(source_value)
     output = source.with_suffix('.fbx')
-    temporary = source.with_suffix('.fbx.tmp')
-    sanitized = source.with_suffix('.sanitized.gltf')
+    temporary = source.with_name(f'.{source.stem}.{os.getpid()}.fbx.tmp')
+    sanitized = source.with_name(f'.{source.stem}.{os.getpid()}.sanitized.gltf')
     dll = load_assimp(dll_path)
 
     try:
-        if output.exists():
-            verification = dll.aiImportFile(os.fsencode(output), 0)
-            if verification:
-                dll.aiReleaseImport(verification)
-                source.unlink()
-                return source_value, 'existing-valid', ''
-            output.unlink()
+        if output.exists() and not overwrite:
+            if is_valid_fbx(dll, output):
+                return source_value, 'skipped-existing', 'source glTF retained'
+            return source_value, 'failed', 'existing FBX is invalid; enable overwrite to replace it'
 
         scene = dll.aiImportFile(os.fsencode(source), 0)
         if not scene:
@@ -146,13 +151,10 @@ def convert_one(arguments):
         finally:
             dll.aiReleaseImport(scene)
 
-        verification = dll.aiImportFile(os.fsencode(temporary), 0)
-        if not verification:
+        if not is_valid_fbx(dll, temporary):
             return source_value, 'failed', 'verification: ' + error_string(dll)
-        dll.aiReleaseImport(verification)
 
         os.replace(temporary, output)
-        source.unlink()
         return source_value, 'converted', ''
     except Exception as exc:
         return source_value, 'failed', str(exc)
@@ -163,6 +165,47 @@ def convert_one(arguments):
             sanitized.unlink()
 
 
+def referenced_local_buffers(source, root):
+    try:
+        document = json.loads(source.read_text(encoding='utf-8'))
+        result = set()
+        for buffer in document.get('buffers', []):
+            uri = buffer.get('uri')
+            if not uri or uri.startswith('data:') or '://' in uri:
+                continue
+            path = (source.parent / uri).resolve()
+            if path.is_relative_to(root):
+                result.add(path)
+        return result
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def remove_converted_sources(all_sources, converted_sources, root):
+    root = Path(root).resolve()
+    converted = {
+        path for path in (Path(value).resolve() for value in converted_sources)
+        if path.is_relative_to(root)
+    }
+    references = {}
+    references_complete = True
+    for source in all_sources:
+        buffers = referenced_local_buffers(source, root)
+        if buffers is None:
+            references_complete = False
+            continue
+        for buffer in buffers:
+            references.setdefault(buffer, set()).add(source.resolve())
+
+    for source in converted:
+        if source.exists():
+            source.unlink()
+    if references_complete:
+        for buffer, owners in references.items():
+            if owners and owners.issubset(converted) and buffer.exists():
+                buffer.unlink()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Convert every glTF under a directory to verified binary FBX.'
@@ -170,28 +213,60 @@ def main():
     parser.add_argument('root', type=Path)
     parser.add_argument('--dll', type=Path, required=True)
     parser.add_argument('--workers', type=int, default=min(8, os.cpu_count() or 1))
+    parser.add_argument('--overwrite', action='store_true',
+                        help='replace existing FBX files')
+    parser.add_argument('--delete-source', action='store_true',
+                        help='delete successfully converted glTF and unshared local buffers')
     args = parser.parse_args()
 
     root = args.root.resolve()
     dll_path = str(args.dll.resolve())
+    stale_sanitized = sorted(
+        path for path in root.rglob('*.gltf')
+        if '.sanitized.' in path.name
+    )
+    if stale_sanitized:
+        print(
+            f'ERROR: found {len(stale_sanitized)} stale sanitized glTF files; '
+            'remove them after confirming no converter is running',
+            flush=True,
+        )
+        raise SystemExit(2)
     sources = sorted(root.rglob('*.gltf'))
     total = len(sources)
+    if total == 0:
+        print('ERROR: no glTF files found for FBX conversion', flush=True)
+        raise SystemExit(2)
+    workers = max(1, args.workers)
     failures = []
-    converted = 0
+    converted_sources = []
+    skipped = 0
 
-    print(f'Found {total} glTF files; workers={args.workers}', flush=True)
-    work = ((str(path), dll_path) for path in sources)
-    with ProcessPoolExecutor(max_workers=args.workers) as executor:
+    print(f'Found {total} glTF files; workers={workers}; overwrite={args.overwrite}', flush=True)
+    work = ((str(path), dll_path, args.overwrite) for path in sources)
+    with ProcessPoolExecutor(max_workers=workers) as executor:
         for index, (source, status, detail) in enumerate(executor.map(convert_one, work), 1):
             if status == 'failed':
                 failures.append((source, detail))
+            elif status == 'converted':
+                converted_sources.append(source)
             else:
-                converted += 1
+                skipped += 1
             if index % 100 == 0 or index == total:
                 print(
-                    f'Processed {index}/{total}; converted={converted}; failed={len(failures)}',
+                    f'Processed {index}/{total}; converted={len(converted_sources)}; '
+                    f'skipped={skipped}; failed={len(failures)}',
                     flush=True,
                 )
+
+    if args.delete_source:
+        remove_converted_sources(sources, converted_sources, root)
+
+    if skipped:
+        print(
+            f'WARNING: {skipped} existing FBX files were not overwritten; source glTF retained',
+            flush=True,
+        )
 
     failure_log = root / 'fbx-conversion-failures.txt'
     if failures:
@@ -200,17 +275,24 @@ def main():
             encoding='utf-8',
         )
         print(f'Failures retained as glTF; see {failure_log}', flush=True)
-        raise SystemExit(1)
-    if failure_log.exists():
+    elif failure_log.exists():
         failure_log.unlink()
 
     inventory = root / 'model-files.txt'
     fbx_files = sorted(root.rglob('*.fbx'))
+    remaining_gltf = sorted(root.rglob('*.gltf'))
     inventory.write_text(
         ''.join(f'{path.relative_to(root)}\n' for path in fbx_files),
         encoding='utf-8-sig',
     )
-    print(f'Complete: {len(fbx_files)} FBX files; 0 glTF files remain', flush=True)
+    print(
+        f'Complete: {len(fbx_files)} FBX files; {len(remaining_gltf)} glTF files remain',
+        flush=True,
+    )
+    if failures:
+        raise SystemExit(1)
+    if skipped:
+        raise SystemExit(3)
 
 
 if __name__ == '__main__':

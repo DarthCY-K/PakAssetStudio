@@ -5,11 +5,12 @@ PAK Asset Studio 是一个 Windows 桌面工具，用于扫描和解包传统 UE
 ## 功能
 
 - 拖放或选择游戏目录，递归发现 `.pak`
-- 使用 repak 判断 PAK 版本、压缩、加密和文件数
-- 跳过 Chromium 等非 Unreal PAK
-- 基础包、Optional 包、补丁包有序合并解包
+- 使用 repak 判断 PAK 索引版本、压缩、索引加密和文件数
+- 区分“索引可读”与“压缩方式受支持”，逐项记录跳过原因
+- 基础包、Optional 包、补丁包按自然编号有序叠加解包
 - UModel 批量导出 glTF、PNG、HDR 和材质描述
-- Assimp 批量转换和重新验证二进制 FBX
+- 可选保守合并明确命名的模型分片；同时转 FBX 时自动使用独立副本，始终保留源 glTF
+- Assimp 批量转换和重新验证二进制 FBX，覆盖与跳过语义明确
 - 中文路径、取消、磁盘空间预检查、失败保留和持久日志
 - 多语言界面（内置简体中文和 English，可向 `Languages/` 目录投放语言文件扩展）
 - 不修改原游戏目录
@@ -18,10 +19,11 @@ PAK Asset Studio 是一个 Windows 桌面工具，用于扫描和解包传统 UE
 
 1. 运行 `PakAssetStudio.exe`。
 2. 选择游戏根目录或直接拖入 Paks 目录。
-3. 点击“扫描 PAK”，确认 Unreal PAK 状态（不支持的包默认隐藏，可用右上角“显示不支持的包”开关查看全部）。
-4. UE4 版本标签会在扫描后按 PAK 格式版本自动识别（可手动修改）；加密包填写合法 AES 密钥。
-5. 选择输出目录和处理步骤；电脑较卡时可开启“低占用模式”（并行度降低，子进程低优先级运行）。
-6. 点击“开始处理”。
+3. 加密包先填写合法 AES 密钥；密钥变化会自动使旧扫描失效。
+4. 点击“扫描 PAK”，确认解包候选状态和跳过原因（不支持的包默认隐藏，可用右上角开关查看全部）。
+5. 只有 PAK 格式唯一对应一个 UE4 版本时才会自动填写 profile；显示版本范围时必须按目标游戏手动选择。
+6. 选择一个空输出目录和处理步骤；默认建议位置在 `%LOCALAPPDATA%\PakAssetStudio`，电脑较卡时可开启“低占用模式”。
+7. 点击“开始处理”。已有受管理输出必须勾选“覆盖”，旧结果会先移动到可恢复备份。
 
 输出目录可能包含：
 
@@ -30,7 +32,10 @@ CookedAssets/    解包后的 cooked 文件
 ExportedAssets/  glTF、BIN、PNG、HDR 和材质描述
 FbxAssets/       保留 glTF 时生成的 FBX 工作副本
 PakAssetStudio.log
+.pakassetstudio-output.json   输出目录所有权标记，请勿删除
 ```
+
+为避免误删文件，程序不会接管非空且没有所有权标记的输出目录。选择典型 `GameName\Content\Paks` 时，整个 `GameName` 都视为受保护游戏目录。任务失败或取消时，新产生的部分结果和覆盖前备份都会保留。
 
 ## 运行要求
 
@@ -42,11 +47,16 @@ PakAssetStudio.log
 ## 限制
 
 - 传统 `.pak` 使用 repak；`.utoc/.ucas` IoStore 暂不支持
-- UModel profile 必须与目标 UE4 版本匹配
-- Cooked 资源不能还原为原始 C++、完整蓝图或可编辑关卡
+- 随附 repak 明确支持 Zlib、Gzip、Zstd；其他压缩方式会在扫描时标记为不支持
+- “索引可读且压缩受支持”只是解包候选；未加密索引中的数据加密问题可能要到实际解包时才能发现
+- PAK 容器版本通常只能确定 UE 版本范围，UModel profile 必须与目标游戏实际版本匹配
+- 保守合并仅识别 `_partNN`、`_pieceNN`、`_meshNN`、`_polySurfaceNN`，不能恢复蓝图或关卡中的部件关系与变换
+- 当前一次任务只接受一个 AES 密钥；多 KeyGuid 游戏需要分批处理
+- 解包步骤处理扫描到的全部候选 PAK，当前不提供逐包勾选
+- 当前流程不导出动画或音频；Cooked 资源也不能还原为原始 C++、完整蓝图或可编辑关卡
 - 仅处理自己拥有或已获授权的项目和资源
 
-第三方工具许可证随各工具一同放在 `Tools` 目录；编译进程序本体的第三方组件声明见 `THIRD-PARTY-NOTICES`。
+repak、UModel、Assimp、Python 的许可证随工具放在 `Tools`；SDL2、VC++ Runtime、.NET 与编译进程序本体的第三方声明见 `THIRD-PARTY-NOTICES`。
 
 ## 法律声明
 
@@ -61,21 +71,33 @@ PakAssetStudio.log
 
 ```powershell
 dotnet build .\PakAssetStudio.slnx -c Release
-dotnet run --project .\PakAssetStudio.Tests\PakAssetStudio.Tests.csproj -c Release
+dotnet test .\PakAssetStudio.slnx -c Release
+.\tools\python\runtime\python.exe -m unittest discover -s .\tools\tests -v
 ```
 
-可选的真实 PAK 扫描测试：
+用随仓库 Assimp DLL 执行真实 glTF -> FBX -> 重新导入验证：
 
 ```powershell
-dotnet run --project .\PakAssetStudio.Tests\PakAssetStudio.Tests.csproj -c Release -- C:\Path\To\Paks
+$env:ASSIMP_TEST_DLL = (Resolve-Path '.\tools\assimp\Release\assimp-vc143-mt.dll')
+.\tools\python\runtime\python.exe -m unittest discover -s .\tools\tests -v
+Remove-Item Env:ASSIMP_TEST_DLL
 ```
 
-发布 Windows x64 便携版本：
+常规 .NET 测试会用随附 repak 动态生成 base/patch PAK fixture，验证扫描、排序、`-f` 覆盖与解包。可选的外部真实 PAK 扫描测试：
 
 ```powershell
-dotnet publish .\PakAssetStudio\PakAssetStudio.csproj -c Release -r win-x64 `
-  --self-contained true -p:PublishSingleFile=true -o .\artifacts\publish\win-x64
+$env:PAK_TEST_DIR = 'C:\Path\To\Paks'
+# 仅加密 PAK：$env:PAK_TEST_AES_KEY = '0x...'
+dotnet test .\PakAssetStudio.slnx -c Release
 ```
+
+发布 Windows x64 便携版本（运行测试、生成第三方版本/哈希清单、ZIP 和 SHA-256）：
+
+```powershell
+.\scripts\Publish.ps1 -Version 0.5.0
+```
+
+仅调试 publish 时仍可直接运行 `dotnet publish`；正式发布应使用脚本或 tag 触发 GitHub Actions。
 
 `bin/`、`obj/`、`publish/`、`artifacts/` 和软件运行输出均已加入 `.gitignore`。
 
@@ -83,12 +105,20 @@ dotnet publish .\PakAssetStudio\PakAssetStudio.csproj -c Release -r win-x64 `
 
 ```text
 PakAssetStudio/        WPF 应用源码
-PakAssetStudio.Tests/  可独立运行的轻量测试与可选 PAK 集成测试
+PakAssetStudio.Tests/  xUnit 单元、合成 PAK 集成与可选真实 PAK 测试
 tools/                 随程序发布的第三方工具、运行时及许可证
 AI_HANDOFF.md          面向后续 AI/开发者的维护交接说明
 ```
 
 ## 版本记录
+
+### 未发布
+
+- 修复重复运行沿用旧 FBX、AES 变化不重扫、补丁覆盖受 UI 开关影响等正确性问题
+- 模型合并改为默认关闭、保守显式分组、保留源文件和原子写入
+- 增加输出目录所有权标记、独占任务锁、覆盖前备份、流式持久日志和目录链接安全检查
+- PAK 扫描区分索引可读与压缩可解包；模糊 UE 版本不再自动猜测 profile
+- 测试迁移到 xUnit，增加合成 PAK、真实 Assimp fixture、Python 脚本测试、Windows CI 和发布布局校验
 
 ### 0.4.0
 

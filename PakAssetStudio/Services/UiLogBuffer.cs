@@ -18,6 +18,12 @@ public sealed record UiLogBatch(IReadOnlyList<UiLogLine> Lines, int Dropped, int
 public sealed class UiLogBuffer
 {
     private readonly ConcurrentQueue<UiLogLine> _lines = new();
+    private readonly Func<int, string> _omittedMessage;
+
+    public UiLogBuffer(Func<int, string>? omittedMessage = null)
+    {
+        _omittedMessage = omittedMessage ?? (count => $"[UI log omitted {count:N0} lines; see PakAssetStudio.log for the complete log]");
+    }
 
     public int Count => _lines.Count;
 
@@ -43,7 +49,7 @@ public sealed class UiLogBuffer
 
         var lines = new List<UiLogLine>();
         if (dropped > 0)
-            lines.Add(new UiLogLine(UiLogLevel.Warning, $"[界面日志已省略 {dropped:N0} 行；完整内容保存在 PakAssetStudio.log]"));
+            lines.Add(new UiLogLine(UiLogLevel.Warning, _omittedMessage(dropped)));
         for (var index = 0; index < batchSize && _lines.TryDequeue(out var line); index++)
             lines.Add(line);
         return new UiLogBatch(lines, dropped, _lines.Count);

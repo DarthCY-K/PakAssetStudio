@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 
@@ -5,7 +6,25 @@ namespace PakAssetStudio.Services;
 
 public sealed record ProcessResult(int ExitCode, string Output);
 
-public sealed class ProcessRunner
+public sealed class ProcessLaunchException : InvalidOperationException
+{
+    public ProcessLaunchException(string message, Exception? innerException = null)
+        : base(message, innerException) { }
+}
+
+public interface IProcessRunner
+{
+    Task<ProcessResult> RunAsync(
+        string executable,
+        IEnumerable<string> arguments,
+        string? workingDirectory,
+        Action<string>? onLine,
+        CancellationToken cancellationToken,
+        ProcessPriorityClass? priority = null,
+        bool captureOutput = true);
+}
+
+public sealed class ProcessRunner : IProcessRunner
 {
     public async Task<ProcessResult> RunAsync(
         string executable,
@@ -13,8 +32,10 @@ public sealed class ProcessRunner
         string? workingDirectory,
         Action<string>? onLine,
         CancellationToken cancellationToken,
-        ProcessPriorityClass? priority = null)
+        ProcessPriorityClass? priority = null,
+        bool captureOutput = true)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
@@ -26,6 +47,8 @@ public sealed class ProcessRunner
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
+        startInfo.Environment["PYTHONUTF8"] = "1";
+        startInfo.Environment["PYTHONIOENCODING"] = "utf-8";
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
@@ -38,9 +61,12 @@ public sealed class ProcessRunner
         void Receive(string? line)
         {
             if (string.IsNullOrWhiteSpace(line)) return;
-            lock (outputLock)
+            if (captureOutput)
             {
-                output.AppendLine(line);
+                lock (outputLock)
+                {
+                    output.AppendLine(line);
+                }
             }
             onLine?.Invoke(line);
         }
@@ -48,9 +74,18 @@ public sealed class ProcessRunner
         process.OutputDataReceived += (_, e) => Receive(e.Data);
         process.ErrorDataReceived += (_, e) => Receive(e.Data);
 
-        if (!process.Start())
+        try
         {
-            throw new InvalidOperationException($"无法启动：{executable}");
+            if (!process.Start())
+                throw new ProcessLaunchException(LocalizationService.TextFormat("Error_ProcessStart", executable));
+        }
+        catch (ProcessLaunchException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+        {
+            throw new ProcessLaunchException(LocalizationService.TextFormat("Error_ProcessStart", executable), ex);
         }
         if (priority.HasValue)
         {

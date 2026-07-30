@@ -28,6 +28,7 @@ public sealed class LocalizationService : INotifyPropertyChanged
     private readonly string _folder;
     private readonly bool _persist;
     private readonly List<LanguageInfo> _languages = [];
+    private readonly Dictionary<string, string> _languagePaths = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, string> _strings = new(StringComparer.OrdinalIgnoreCase);
     private bool _initialized;
 
@@ -71,7 +72,19 @@ public sealed class LocalizationService : INotifyPropertyChanged
     public string Get(string key) =>
         _strings.TryGetValue(key, out var value) ? value : key;
 
-    public string Format(string key, params object[] args) => string.Format(Get(key), args);
+    public string Format(string key, params object[] args)
+    {
+        var format = Get(key);
+        try
+        {
+            return string.Format(format, args);
+        }
+        catch (FormatException)
+        {
+            // 第三方语言文件的占位符损坏时显示原文，不让界面操作崩溃。
+            return format;
+        }
+    }
 
     public static string Text(string key) => Instance.Get(key);
 
@@ -79,15 +92,22 @@ public sealed class LocalizationService : INotifyPropertyChanged
 
     public void SetLanguage(string code)
     {
-        var merged = ReadLanguageFile(Path.Combine(_folder, FallbackCode + ".json"));
-        if (!code.Equals(FallbackCode, StringComparison.OrdinalIgnoreCase))
+        var selected = _languages.FirstOrDefault(language =>
+            language.Code.Equals(code, StringComparison.OrdinalIgnoreCase));
+        var safeCode = selected?.Code ?? FallbackCode;
+        var fallbackPath = _languagePaths.GetValueOrDefault(
+            FallbackCode, Path.Combine(_folder, FallbackCode + ".json"));
+        var merged = ReadLanguageFile(fallbackPath);
+        if (!safeCode.Equals(FallbackCode, StringComparison.OrdinalIgnoreCase))
         {
-            foreach (var pair in ReadLanguageFile(Path.Combine(_folder, code + ".json")))
+            var selectedPath = _languagePaths.GetValueOrDefault(
+                safeCode, Path.Combine(_folder, safeCode + ".json"));
+            foreach (var pair in ReadLanguageFile(selectedPath))
                 merged[pair.Key] = pair.Value;
         }
 
         _strings = merged;
-        CurrentCode = code;
+        CurrentCode = safeCode;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs("Item[]"));
         LanguageChanged?.Invoke(this, EventArgs.Empty);
         if (_persist) SavePreference();
@@ -107,9 +127,9 @@ public sealed class LocalizationService : INotifyPropertyChanged
                     result[pair.Key] = pair.Value;
             }
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            // 语言文件损坏时忽略，保持回退文本。
+            // 语言文件损坏、被占用或不可访问时忽略，保持回退文本。
         }
         return result;
     }
@@ -117,28 +137,44 @@ public sealed class LocalizationService : INotifyPropertyChanged
     private void DiscoverLanguages()
     {
         _languages.Clear();
-        if (Directory.Exists(_folder))
+        _languagePaths.Clear();
+        try
         {
-            foreach (var file in Directory.EnumerateFiles(_folder, "*.json").OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+            if (Directory.Exists(_folder))
             {
-                try
+                foreach (var file in Directory.EnumerateFiles(_folder, "*.json").OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
                 {
-                    var model = JsonSerializer.Deserialize<LanguageFileModel>(File.ReadAllText(file), JsonOptions);
-                    var code = model?.Code;
-                    if (string.IsNullOrWhiteSpace(code))
-                        code = Path.GetFileNameWithoutExtension(file);
-                    var name = string.IsNullOrWhiteSpace(model?.Language) ? code : model!.Language!;
-                    _languages.Add(new LanguageInfo(code, name));
-                }
-                catch (JsonException)
-                {
-                    // 跳过无法解析的语言文件。
+                    try
+                    {
+                        var model = JsonSerializer.Deserialize<LanguageFileModel>(File.ReadAllText(file), JsonOptions);
+                        var code = string.IsNullOrWhiteSpace(model?.Code)
+                            ? Path.GetFileNameWithoutExtension(file)
+                            : model!.Code!;
+                        if (!IsSafeLanguageCode(code) || _languages.Any(language =>
+                                language.Code.Equals(code, StringComparison.OrdinalIgnoreCase)))
+                            continue;
+                        var name = string.IsNullOrWhiteSpace(model?.Language) ? code : model!.Language!;
+                        _languages.Add(new LanguageInfo(code, name));
+                        _languagePaths[code] = file;
+                    }
+                    catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+                    {
+                        // 跳过无法解析或读取的语言文件。
+                    }
                 }
             }
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Languages 目录本身不可访问时使用内置回退项。
+        }
+
         if (_languages.Count == 0)
             _languages.Add(new LanguageInfo(FallbackCode, "简体中文"));
     }
+
+    private static bool IsSafeLanguageCode(string code) =>
+        code.Length is > 0 and <= 32 && code.All(character => char.IsAsciiLetterOrDigit(character) || character == '-');
 
     private static string PreferencePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

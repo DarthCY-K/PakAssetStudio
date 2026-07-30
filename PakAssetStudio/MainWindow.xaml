@@ -4,7 +4,7 @@
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:l="clr-namespace:PakAssetStudio.Services"
         Title="PAK Asset Studio" Width="1280" Height="930"
-        MinWidth="1120" MinHeight="760"
+        MinWidth="880" MinHeight="480"
         WindowStartupLocation="CenterScreen"
         ExtendsContentIntoTitleBar="True"
         WindowBackdropType="Mica"
@@ -237,7 +237,7 @@
                     <TextBlock Text="{l:Loc Profile_AutoBadge}" FontSize="10" Foreground="{DynamicResource TextOnAccentFillColorPrimaryBrush}" FontWeight="SemiBold" />
                   </Border>
                 </StackPanel>
-                <ComboBox x:Name="GameProfileBox" IsEditable="True" SelectedIndex="26"
+                <ComboBox x:Name="GameProfileBox" IsEditable="True"
                           SelectionChanged="GameProfileBox_Changed">
                   <ComboBoxItem Content="ue4.0" /><ComboBoxItem Content="ue4.1" /><ComboBoxItem Content="ue4.2" />
                   <ComboBoxItem Content="ue4.3" /><ComboBoxItem Content="ue4.4" /><ComboBoxItem Content="ue4.5" />
@@ -250,6 +250,9 @@
                   <ComboBoxItem Content="ue4.24" /><ComboBoxItem Content="ue4.25" /><ComboBoxItem Content="ue4.26" />
                   <ComboBoxItem Content="ue4.27" />
                 </ComboBox>
+                <TextBlock x:Name="ProfileRangeHint" Visibility="Collapsed" Margin="0,5,0,0"
+                           FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                           TextWrapping="Wrap" />
               </StackPanel>
               <StackPanel Grid.Column="1">
                 <TextBlock Text="{l:Loc Profile_Workers}" Style="{StaticResource FieldLabel}" Margin="0,0,0,5" />
@@ -261,7 +264,8 @@
             </Grid>
 
             <TextBlock Text="{l:Loc Profile_AesLabel}" Style="{StaticResource FieldLabel}" />
-            <ui:PasswordBox x:Name="AesKeyBox" RevealButtonEnabled="True" ToolTip="{l:Loc Profile_AesTip}" />
+            <ui:PasswordBox x:Name="AesKeyBox" RevealButtonEnabled="True" ToolTip="{l:Loc Profile_AesTip}"
+                            PasswordChanged="AesKeyBox_PasswordChanged" />
 
             <ui:ToggleSwitch x:Name="LowResourceCheck" Content="{l:Loc Profile_LowResource}" Margin="0,14,0,2"
                              ToolTip="{l:Loc Profile_LowResourceTip}" />
@@ -288,8 +292,10 @@
                              Checked="Option_Changed" Unchecked="Option_Changed" />
             <ui:ToggleSwitch x:Name="ModelsCheck" Content="{l:Loc Steps_Models}" IsChecked="True" Margin="0,8,0,0" Checked="Option_Changed" Unchecked="Option_Changed" />
             <ui:ToggleSwitch x:Name="TexturesCheck" Content="{l:Loc Steps_Textures}" IsChecked="True" Margin="0,8,0,0" Checked="Option_Changed" Unchecked="Option_Changed" />
-            <ui:ToggleSwitch x:Name="FbxCheck" Content="{l:Loc Steps_Fbx}" IsChecked="True" Margin="0,8,0,0" Checked="Option_Changed" Unchecked="Option_Changed" />
-            <ui:ToggleSwitch x:Name="MergeCheck" Content="{l:Loc Steps_Merge}" IsChecked="True" Margin="0,8,0,0"
+            <ui:ToggleSwitch x:Name="FbxCheck" Content="{l:Loc Steps_Fbx}" IsChecked="True" Margin="0,8,0,0"
+                             ToolTip="{l:Loc Steps_FbxTip}" ToolTipService.ShowOnDisabled="True"
+                             Checked="Option_Changed" Unchecked="Option_Changed" />
+            <ui:ToggleSwitch x:Name="MergeCheck" Content="{l:Loc Steps_Merge}" Margin="0,8,0,0"
                              ToolTip="{l:Loc Steps_MergeTip}" Checked="Option_Changed" Unchecked="Option_Changed" />
 
             <TextBlock Text="{l:Loc Steps_GroupOutput}" Style="{StaticResource FieldLabel}" />
@@ -298,6 +304,7 @@
             <ui:ToggleSwitch x:Name="DeleteCookedCheck" Content="{l:Loc Steps_DeleteCooked}" IsChecked="True" Margin="0,8,0,0"
                              ToolTip="{l:Loc Steps_DeleteCookedTip}" Checked="Option_Changed" Unchecked="Option_Changed" />
             <ui:ToggleSwitch x:Name="OverwriteCheck" Content="{l:Loc Steps_Overwrite}" Margin="0,8,0,0"
+                             ToolTip="{l:Loc Steps_OverwriteTip}"
                              Checked="Option_Changed" Unchecked="Option_Changed" />
           </StackPanel>
         </ui:Card>
@@ -357,9 +364,15 @@
                 <DataGridTextColumn Header="{l:Loc Grid_Files}" Binding="{Binding FileCount}" Width="76"
                                     ElementStyle="{StaticResource GridCellTextCenter}"
                                     HeaderStyle="{StaticResource GridColumnHeaderCenter}" />
-                <DataGridTextColumn Header="{l:Loc Grid_Status}" Binding="{Binding Status}" Width="108"
-                                    ElementStyle="{StaticResource GridCellTextCenter}"
-                                    HeaderStyle="{StaticResource GridColumnHeaderCenter}" />
+                <DataGridTemplateColumn Header="{l:Loc Grid_Status}" Width="154"
+                                        HeaderStyle="{StaticResource GridColumnHeaderCenter}">
+                  <DataGridTemplateColumn.CellTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Status}" TextAlignment="Center" VerticalAlignment="Center"
+                                 ToolTip="{Binding ScanError}" TextTrimming="CharacterEllipsis" />
+                    </DataTemplate>
+                  </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
               </DataGrid.Columns>
             </DataGrid>
             <StackPanel x:Name="PakEmptyState" VerticalAlignment="Center" HorizontalAlignment="Center" IsHitTestVisible="False">
@@ -401,7 +414,7 @@
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
           <ui:Button x:Name="OpenOutputButton" ToolTip="{l:Loc Btn_OpenOutputTip}" Click="OpenOutput_Click">
             <ui:Button.Icon>
-              <ui:SymbolIcon Symbol="OpenFolder20" />
+              <ui:SymbolIcon Symbol="FolderOpen20" />
             </ui:Button.Icon>
           </ui:Button>
           <ui:Button x:Name="CancelButton" Content="{l:Loc Btn_Cancel}" Margin="8,0,0,0" Click="Cancel_Click" IsEnabled="False" MinWidth="88">

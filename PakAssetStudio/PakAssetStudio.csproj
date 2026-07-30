@@ -9,7 +9,7 @@
     <AssemblyName>PakAssetStudio</AssemblyName>
     <RootNamespace>PakAssetStudio</RootNamespace>
     <Product>PAK Asset Studio</Product>
-    <!-- MinVer：版本号由 git tag 自动生成。打 v0.2.0 标签即得 0.2.0；标签之后的提交自动变为预发布版本（如 0.2.0-alpha.0.3+sha） -->
+    <!-- MinVer：版本号由 v* git tag 自动生成；标签后的提交自动成为带提交号的预发布版本。 -->
     <MinVerMinimumMajorMinor>0.1</MinVerMinimumMajorMinor>
     <MinVerTagPrefix>v</MinVerTagPrefix>
     <Description>UE4 PAK extraction and model/texture export desktop workflow.</Description>
@@ -21,17 +21,20 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="..\tools\repak\repak.exe" Link="Tools\repak\repak.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
-    <Content Include="..\tools\repak\LICENSE-APACHE" Link="Tools\repak\LICENSE-APACHE" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\tools\repak\LICENSE-MIT" Link="Tools\repak\LICENSE-MIT" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\tools\repak\LICENSE-APACHE" Link="Tools\repak\LICENSE-APACHE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\tools\repak\LICENSE-MIT" Link="Tools\repak\LICENSE-MIT" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\tools\repak\README.md" Link="Tools\repak\README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\tools\umodel\umodel_64.exe" Link="Tools\umodel\umodel_64.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <Content Include="..\tools\umodel\SDL2_64.dll" Link="Tools\umodel\SDL2_64.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
-    <Content Include="..\tools\umodel\LICENSE.txt" Link="Tools\umodel\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\tools\umodel\LICENSE.txt" Link="Tools\umodel\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\tools\umodel\README.txt" Link="Tools\umodel\README.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\tools\assimp\Release\assimp-vc143-mt.dll" Link="Tools\assimp\assimp-vc143-mt.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
-    <Content Include="..\tools\assimp\LICENSE" Link="Tools\assimp\LICENSE" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\tools\assimp\LICENSE" Link="Tools\assimp\LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\tools\convert_gltf_to_fbx.py" Link="Tools\convert_gltf_to_fbx.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <Content Include="..\tools\merge_gltf.py" Link="Tools\merge_gltf.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <Content Include="..\tools\python\runtime\**\*" Link="Tools\python\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
-    <Content Include="..\README.md" Link="README.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\README.md" Link="README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\THIRD-PARTY-NOTICES" Link="THIRD-PARTY-NOTICES" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\tools\vc_runtime\vc_redist.x64.exe" Link="Prerequisites\vc_redist.x64.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>

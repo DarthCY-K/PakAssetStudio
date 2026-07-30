@@ -2,47 +2,62 @@ using PakAssetStudio.Models;
 
 namespace PakAssetStudio.Services;
 
+public sealed record Ue4ProfileDetection(string? SuggestedProfile, string Range, bool IsAmbiguous);
+
 /// <summary>
-/// 根据 repak 报告的传统 PAK 格式版本推测最接近的 UE4 版本标签。
-/// 映射依据 repak README 兼容性表（V2→4.0-4.2 … V11→4.26+）；
-/// 同一 PAK 版本可能跨越多个 UE4 版本，取区间内的最高版本（UModel 的版本标签向下兼容旧格式）。
+/// PAK 容器版本只能限定 UE 版本范围。只有范围唯一时才自动填写 UModel profile；
+/// 宽范围和 repak 未确认的版本只给出提示，避免把容器版本误当成 cooked 资产版本。
 /// </summary>
 public static class Ue4ProfileDetector
 {
-    /// <summary>从扫描结果中推断 UE4 版本标签；无法判断时返回 null。</summary>
-    public static string? Detect(IEnumerable<PakEntry> entries)
-    {
-        var detected = entries
-            .Where(entry => entry.IsValid)
-            .Select(entry => MapVersion(entry.Version))
-            .Where(profile => profile is not null)
-            .Select(profile => profile!)
-            .ToList();
-        if (detected.Count == 0) return null;
+    public static string? Detect(IEnumerable<PakEntry> entries) => DetectDetailed(entries)?.SuggestedProfile;
 
-        // 取出现次数最多的标签，平票时取更高版本
-        return detected
-            .GroupBy(profile => profile)
-            .OrderByDescending(group => group.Count())
-            .ThenByDescending(group => int.Parse(group.Key["ue4.".Length..]))
-            .First().Key;
+    public static Ue4ProfileDetection? DetectDetailed(IEnumerable<PakEntry> entries)
+    {
+        var candidates = entries
+            .Where(entry => entry.IsValid)
+            .Select(entry => MapVersion(entry.Version) ?? UnknownVersion(entry.Version))
+            .Distinct()
+            .ToList();
+        if (candidates.Count == 0) return null;
+
+        if (candidates.Count == 1) return candidates[0];
+
+        var exactProfiles = candidates
+            .Where(candidate => !candidate.IsAmbiguous && candidate.SuggestedProfile is not null)
+            .Select(candidate => candidate.SuggestedProfile!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (exactProfiles.Count == 1 && candidates.All(candidate => !candidate.IsAmbiguous))
+            return new Ue4ProfileDetection(exactProfiles[0], candidates[0].Range, false);
+
+        return new Ue4ProfileDetection(
+            null,
+            string.Join(", ", candidates.Select(candidate => candidate.Range).Distinct(StringComparer.OrdinalIgnoreCase)),
+            true);
     }
 
-    private static string? MapVersion(string? version) => version?.Trim().ToUpperInvariant() switch
+    private static Ue4ProfileDetection UnknownVersion(string? version)
     {
-        "V1" => "ue4.0",
-        "V2" => "ue4.2",
-        "V3" => "ue4.15",
-        "V4" => "ue4.19",
-        "V5" => "ue4.20",
-        "V6" => "ue4.21",
-        "V7" => "ue4.21",
-        "V8A" => "ue4.22",
-        "V8B" => "ue4.24",
-        "V9" => "ue4.25",
-        "V10" => "ue4.26",
-        // V11 同时见于 UE4.26–5.3；本工具只面向 UE4，取 ue4.26 更稳妥，界面会提示可手动切到 ue4.27
-        "V11" => "ue4.26",
+        var value = string.IsNullOrWhiteSpace(version) || version == "-" ? "?" : version.Trim();
+        return new Ue4ProfileDetection(null, $"PAK {value}", true);
+    }
+
+    public static Ue4ProfileDetection? MapVersion(string? version) => version?.Trim().ToUpperInvariant() switch
+    {
+        // repak 将 V1、V6、V10 标记为版本归属或读取能力未确认，不能据此选择 UModel profile。
+        "V1" => new(null, "PAK V1 (?)", true),
+        "V2" => new(null, "UE4.0-UE4.2", true),
+        "V3" => new(null, "UE4.3-UE4.15", true),
+        "V4" => new(null, "UE4.16-UE4.19", true),
+        "V5" => new("ue4.20", "UE4.20", false),
+        "V6" => new(null, "PAK V6 (?)", true),
+        "V7" => new("ue4.21", "UE4.21", false),
+        "V8A" => new("ue4.22", "UE4.22", false),
+        "V8B" => new(null, "UE4.23-UE4.24", true),
+        "V9" => new("ue4.25", "UE4.25", false),
+        "V10" => new(null, "PAK V10 (?)", true),
+        "V11" => new(null, "UE4.26-UE4.27 / UE5", true),
         _ => null
     };
 }

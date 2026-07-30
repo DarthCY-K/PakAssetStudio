@@ -1,89 +1,886 @@
+using System.Diagnostics;
 using PakAssetStudio.Models;
 using PakAssetStudio.Services;
+using Xunit;
 
-var sampleEntries = new List<PakEntry>
+namespace PakAssetStudio.Tests;
+
+public sealed class PakToolTests
 {
-    new() { Name = "pakchunk0optional-WindowsNoEditor.pak", FullPath = "optional.pak", IsValid = true },
-    new() { Name = "pakchunk0-WindowsNoEditor_P.pak", FullPath = "patch.pak", IsValid = true },
-    new() { Name = "pakchunk0-WindowsNoEditor.pak", FullPath = "base.pak", IsValid = true }
-};
-var ordered = PakToolService.GetExtractionOrder(sampleEntries);
-Assert(!ordered[0].IsOptional, "The base PAK must be extracted before the optional PAK");
-Assert(ordered[0].Name == "pakchunk0-WindowsNoEditor.pak", "The base PAK must be extracted first");
-Assert(ordered[^1].IsPatch, "The patch PAK must be extracted last");
+    [Fact]
+    public void ExtractionOrderUsesNaturalPatchOrderAndSkipsUnsupportedCompression()
+    {
+        var entries = new List<PakEntry>
+        {
+            Entry("pakchunk0_10_P.pak", valid: true),
+            Entry("Dispatch.pak", valid: true),
+            Entry("pakchunk0optional.pak", valid: true),
+            Entry("pakchunk0_2_P.pak", valid: true),
+            Entry("pakchunk0.pak", valid: true),
+            new()
+            {
+                Name = "pakchunk1.pak", FullPath = "pakchunk1.pak", IsValid = true,
+                IsCompressionSupported = false
+            }
+        };
 
-var logBuffer = new UiLogBuffer();
-for (var index = 0; index < 50_000; index++) logBuffer.Enqueue($"stress-line-{index}");
-var firstBatch = logBuffer.Drain();
-Assert(firstBatch.Dropped >= 45_000, "A large UI log backlog should discard old display lines");
-Assert(firstBatch.Lines.Any(line => line.Text.Contains("已省略")), "The UI log should report omitted display lines");
-Assert(firstBatch.Lines[0].Level == UiLogLevel.Warning, "The omitted-lines notice should be a warning");
-Assert(firstBatch.Remaining <= 1_000, "The retained UI backlog should be bounded");
+        var ordered = PakToolService.GetExtractionOrder(entries);
 
-var versionEntries = new List<PakEntry>
-{
-    new() { Name = "base.pak", FullPath = "base.pak", IsValid = true, Version = "V8B" },
-    new() { Name = "patch.pak", FullPath = "patch.pak", IsValid = true, Version = "V8A" },
-    new() { Name = "broken.pak", FullPath = "broken.pak", IsValid = false, Version = "V11" }
-};
-Assert(Ue4ProfileDetector.Detect(versionEntries) == "ue4.24", "V8B should map to the highest UE4 version of its range");
-Assert(Ue4ProfileDetector.Detect([new PakEntry { Name = "a.pak", FullPath = "a.pak", IsValid = true, Version = "V11" }]) == "ue4.26", "V11 should map to ue4.26 (the lower of its UE4 range)");
-Assert(Ue4ProfileDetector.Detect([new PakEntry { Name = "a.pak", FullPath = "a.pak", IsValid = false, Version = "V11" }]) is null, "Invalid PAKs must not affect detection");
-Assert(Ue4ProfileDetector.Detect([new PakEntry { Name = "a.pak", FullPath = "a.pak", IsValid = true, Version = "-" }]) is null, "Unknown versions must not affect detection");
-Console.WriteLine("PASS: UE4 profile detection maps PAK versions and ignores invalid entries");
+        Assert.Equal(
+            new[] { "Dispatch.pak", "pakchunk0.pak", "pakchunk0optional.pak", "pakchunk0_2_P.pak", "pakchunk0_10_P.pak" },
+            ordered.Select(entry => entry.Name));
+    }
 
-var normalOptions = new WorkflowOptions { GameDirectory = ".", OutputDirectory = ".", GameProfile = "ue4.26", Workers = 8 };
-var lowOptions = new WorkflowOptions { GameDirectory = ".", OutputDirectory = ".", GameProfile = "ue4.26", Workers = 8, LowResource = true };
-Assert(WorkflowService.GetEffectiveWorkers(normalOptions) == 8, "Normal mode must keep the configured worker count");
-Assert(WorkflowService.GetEffectiveWorkers(lowOptions) == 2, "Low-resource mode must clamp workers to 2");
-Console.WriteLine("PASS: low-resource mode clamps worker parallelism");
+    [Theory]
+    [InlineData("None", true)]
+    [InlineData("Zlib", true)]
+    [InlineData("[Zlib, Gzip, Zstd]", true)]
+    [InlineData("Oodle", false)]
+    [InlineData("Zlib, Oodle", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    [InlineData("-", false)]
+    [InlineData("[]", false)]
+    [InlineData("123", false)]
+    [InlineData("[Zlib, ???]", false)]
+    [InlineData("[Zlib", false)]
+    public void CompressionCapabilityIsExplicit(string? value, bool expected)
+    {
+        Assert.Equal(expected, PakToolService.IsCompressionSupported(value));
+    }
 
-var languageDir = Directory.CreateTempSubdirectory("pakassetstudio-lang-");
-try
-{
-    File.WriteAllText(Path.Combine(languageDir.FullName, "zh-CN.json"), """
-        { "code": "zh-CN", "language": "简体中文", "strings": { "Greeting": "你好", "OnlyZh": "仅中文" } }
-        """);
-    File.WriteAllText(Path.Combine(languageDir.FullName, "en-US.json"), """
-        { "code": "en-US", "language": "English", "strings": { "Greeting": "Hello" } }
-        """);
-    var localization = new LocalizationService(languageDir.FullName);
-    localization.Initialize();
-    Assert(localization.AvailableLanguages.Count == 2, "Both shipped language files should be discovered");
-    Assert(localization.Get("Greeting") == "你好", "Default language should be Simplified Chinese");
-    localization.SetLanguage("en-US");
-    Assert(localization.Get("Greeting") == "Hello", "Switching to English should return the English text");
-    Assert(localization.Get("OnlyZh") == "仅中文", "Missing entries must fall back to Simplified Chinese");
-    Assert(localization.Get("Unknown_Key") == "Unknown_Key", "Completely missing keys should render the key itself");
-    Console.WriteLine("PASS: localization loads external files, falls back to zh-CN and renders unknown keys");
+    [Fact]
+    public async Task ScanDoesNotFollowDirectoryLinksOutsideTheSelectedRoot()
+    {
+        using var directory = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(Path.Combine(directory.Path, "Game")).FullName;
+        var outside = Directory.CreateDirectory(Path.Combine(directory.Path, "Outside")).FullName;
+        await File.WriteAllBytesAsync(Path.Combine(game, "inside.pak"), [1]);
+        await File.WriteAllBytesAsync(Path.Combine(outside, "outside.pak"), [2]);
+        try
+        {
+            Directory.CreateSymbolicLink(Path.Combine(game, "OutsideLink"), outside);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or NotSupportedException)
+        {
+            return;
+        }
+        var runner = new FakeProcessRunner(new ProcessResult(0, """
+            version: V9
+            compression: Zlib
+            1 file entries
+            """));
+        var service = new PakToolService(runner);
+
+        var entries = await service.ScanAsync(game, null, null, CancellationToken.None);
+
+        Assert.Single(entries);
+        Assert.Equal("inside.pak", entries[0].Name);
+    }
+
+    [Fact]
+    public async Task ScanDoesNotCallAnOodlePakExtractable()
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "oodle.pak"), [1, 2, 3]);
+        var runner = new FakeProcessRunner(new ProcessResult(0, """
+            mount point: ../../../
+            version: V11
+            compression: Oodle
+            encrypted index: false
+            12 file entries
+            """));
+        var service = new PakToolService(runner);
+
+        var entry = Assert.Single(await service.ScanAsync(
+            directory.Path, null, null, CancellationToken.None));
+
+        Assert.True(entry.IsValid);
+        Assert.False(entry.CanAttemptExtraction);
+        Assert.Equal(12, entry.FileCount);
+    }
+
+    [Fact]
+    public async Task ScanDoesNotCallAPakWithMissingCompressionMetadataExtractable()
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "unknown.pak"), [1, 2, 3]);
+        var runner = new FakeProcessRunner(new ProcessResult(0, """
+            mount point: ../../../
+            version: V11
+            encrypted index: false
+            12 file entries
+            """));
+        var service = new PakToolService(runner);
+
+        var entry = Assert.Single(await service.ScanAsync(
+            directory.Path, null, null, CancellationToken.None));
+
+        Assert.True(entry.IsValid);
+        Assert.Equal("-", entry.Compression);
+        Assert.False(entry.CanAttemptExtraction);
+    }
+
+    [Fact]
+    public async Task RepakLaunchFailureStopsTheScanInsteadOfMislabelingEveryPak()
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "one.pak"), [1]);
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "two.pak"), [2]);
+        var service = new PakToolService(new LaunchFailureProcessRunner());
+
+        await Assert.ThrowsAsync<ProcessLaunchException>(() => service.ScanAsync(
+            directory.Path, null, null, CancellationToken.None));
+    }
+
+    [Fact]
+    public void AesRedactionCoversCaseAndOptionalHexPrefix()
+    {
+        var redacted = PakToolService.RedactSensitive(
+            "repak echoed ABCDEF0123456789", "0xabcdef0123456789");
+
+        Assert.DoesNotContain("ABCDEF0123456789", redacted);
+        Assert.Contains("***", redacted);
+    }
+
+    [Fact]
+    public async Task ScanRedactsAesKeyFromDiagnostics()
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "encrypted.pak"), [1, 2, 3]);
+        var runner = new FakeProcessRunner(new ProcessResult(1, "bad key: secret-value"));
+        var service = new PakToolService(runner);
+
+        var entries = await service.ScanAsync(
+            directory.Path, "secret-value", null, CancellationToken.None);
+
+        var entry = Assert.Single(entries);
+        Assert.False(entry.IsValid);
+        Assert.NotNull(entry.ScanError);
+        Assert.DoesNotContain("secret-value", entry.ScanError);
+        Assert.Contains("***", entry.ScanError);
+    }
+
+    private static PakEntry Entry(string name, bool valid) =>
+        new() { Name = name, FullPath = name, IsValid = valid };
 }
-finally
+
+public sealed class ProfileDetectionTests
 {
-    languageDir.Delete(recursive: true);
+    [Theory]
+    [InlineData("V5", "ue4.20")]
+    [InlineData("V7", "ue4.21")]
+    [InlineData("V8A", "ue4.22")]
+    [InlineData("V9", "ue4.25")]
+    public void ExactContainerVersionsCanFillProfile(string version, string expected)
+    {
+        Assert.Equal(expected, Ue4ProfileDetector.Detect([Entry(version)]));
+    }
+
+    [Theory]
+    [InlineData("V2")]
+    [InlineData("V3")]
+    [InlineData("V4")]
+    [InlineData("V8B")]
+    [InlineData("V11")]
+    public void RangedContainerVersionsNeverGuessProfile(string version)
+    {
+        var detection = Ue4ProfileDetector.DetectDetailed([Entry(version)]);
+
+        Assert.NotNull(detection);
+        Assert.True(detection.IsAmbiguous);
+        Assert.Null(detection.SuggestedProfile);
+    }
+
+    [Theory]
+    [InlineData("V1")]
+    [InlineData("V6")]
+    [InlineData("V10")]
+    public void UnconfirmedContainerVersionsNeverGuessProfile(string version)
+    {
+        var detection = Ue4ProfileDetector.DetectDetailed([Entry(version)]);
+
+        Assert.NotNull(detection);
+        Assert.True(detection.IsAmbiguous);
+        Assert.Null(detection.SuggestedProfile);
+    }
+
+    [Fact]
+    public void MissingContainerVersionIsAmbiguous()
+    {
+        var detection = Ue4ProfileDetector.DetectDetailed([Entry("-")]);
+
+        Assert.NotNull(detection);
+        Assert.True(detection.IsAmbiguous);
+        Assert.Null(detection.SuggestedProfile);
+    }
+
+    [Fact]
+    public void UnknownVersionPreventsAutomaticProfileFromKnownEntries()
+    {
+        var detection = Ue4ProfileDetector.DetectDetailed([Entry("V9"), Entry("V12")]);
+
+        Assert.NotNull(detection);
+        Assert.True(detection.IsAmbiguous);
+        Assert.Null(detection.SuggestedProfile);
+        Assert.Contains("V12", detection.Range);
+    }
+
+    private static PakEntry Entry(string version) =>
+        new() { Name = "test.pak", FullPath = "test.pak", IsValid = true, Version = version };
 }
 
-Console.WriteLine($"PASS: extraction order={string.Join(" -> ", ordered.Select(entry => entry.Name))}");
-Console.WriteLine($"PASS: throttled 50,000 UI log lines; dropped={firstBatch.Dropped}; remaining={firstBatch.Remaining}");
-
-if (args.Length == 1)
+public sealed class LogAndResourceTests
 {
-    Assert(Directory.Exists(args[0]), $"PAK test directory does not exist: {args[0]}");
-    var service = new PakToolService(new ProcessRunner());
-    var entries = await service.ScanAsync(args[0], null, null, CancellationToken.None);
-    Assert(entries.Count > 0, "No PAK files were found");
-    Assert(entries.All(entry => entry.IsValid), "Every test PAK should be readable");
-    foreach (var entry in entries)
-        Console.WriteLine($"SCAN: {entry.Name} valid={entry.IsValid} version={entry.Version} files={entry.FileCount} status={entry.Status}");
+    [Fact]
+    public async Task ProcessOutputCanBeStreamedWithoutBeingRetained()
+    {
+        var lines = new List<string>();
+        var runner = new ProcessRunner();
+        var command = System.IO.Path.Combine(Environment.SystemDirectory, "cmd.exe");
+
+        var result = await runner.RunAsync(
+            command,
+            ["/c", "echo streamed-line"],
+            null,
+            lines.Add,
+            CancellationToken.None,
+            captureOutput: false);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.Output);
+        Assert.Contains(lines, line => line.Contains("streamed-line", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void UiLogBacklogIsBoundedAndUsesInjectedLocalizedNotice()
+    {
+        var buffer = new UiLogBuffer(count => $"omitted:{count}");
+        for (var index = 0; index < 50_000; index++) buffer.Enqueue($"line-{index}");
+
+        var batch = buffer.Drain();
+
+        Assert.True(batch.Dropped >= 45_000);
+        Assert.StartsWith("omitted:", batch.Lines[0].Text);
+        Assert.Equal(UiLogLevel.Warning, batch.Lines[0].Level);
+        Assert.True(batch.Remaining <= 1_000);
+    }
+
+    [Fact]
+    public void DiskEstimateHonorsCancellationBeforeTraversingInputs()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            WorkflowService.EstimateDiskSpace([], Options(1, false), cancellation.Token));
+    }
+
+    [Fact]
+    public void MergeAndFbxEstimateIncludesForcedGltfCopy()
+    {
+        const long pakSize = 100L << 20;
+        var options = new WorkflowOptions
+        {
+            GameDirectory = ".",
+            OutputDirectory = ".",
+            GameProfile = "ue4.25",
+            ExtractPaks = true,
+            ConvertToFbx = true,
+            MergeModels = true,
+            KeepGltf = false,
+            Workers = 1
+        };
+        var entry = new PakEntry
+        {
+            Name = "base.pak",
+            FullPath = "base.pak",
+            IsValid = true,
+            SizeBytes = pakSize
+        };
+
+        var estimate = WorkflowService.EstimateDiskSpace([entry], options);
+
+        Assert.Equal(600L << 20, estimate.RequiredBytes);
+    }
+
+    [Fact]
+    public void LowResourceModeClampsWorkersAndNeverReturnsZero()
+    {
+        var normal = Options(workers: 8, lowResource: false);
+        var low = Options(workers: 8, lowResource: true);
+        var invalid = Options(workers: 0, lowResource: true);
+
+        Assert.Equal(8, WorkflowService.GetEffectiveWorkers(normal));
+        Assert.Equal(2, WorkflowService.GetEffectiveWorkers(low));
+        Assert.Equal(1, WorkflowService.GetEffectiveWorkers(invalid));
+    }
+
+    private static WorkflowOptions Options(int workers, bool lowResource) => new()
+    {
+        GameDirectory = ".",
+        OutputDirectory = ".",
+        GameProfile = "ue4.26",
+        Workers = workers,
+        LowResource = lowResource
+    };
 }
-else if (args.Length > 1)
+
+public sealed class LocalizationTests
 {
-    Console.Error.WriteLine("Usage: PakAssetStudio.Tests [paks-directory]");
-    return 2;
+    [Fact]
+    public void FilesLoadWithFallbackAndMalformedFormatsDoNotCrash()
+    {
+        using var directory = new TemporaryDirectory();
+        File.WriteAllText(Path.Combine(directory.Path, "zh-CN.json"), """
+            { "code": "zh-CN", "language": "简体中文", "strings": {
+              "Greeting": "你好", "OnlyZh": "仅中文", "Broken": "{0"
+            } }
+            """);
+        File.WriteAllText(Path.Combine(directory.Path, "en-US.json"), """
+            { "code": "en-US", "language": "English", "strings": { "Greeting": "Hello" } }
+            """);
+        File.WriteAllText(Path.Combine(directory.Path, "custom-name.json"), """
+            { "code": "fr-FR", "language": "Francais", "strings": { "Greeting": "Bonjour" } }
+            """);
+        File.WriteAllText(Path.Combine(directory.Path, "unsafe.json"), """
+            { "code": "../outside", "language": "Unsafe", "strings": { "Greeting": "Bad" } }
+            """);
+
+        var localization = new LocalizationService(directory.Path);
+        localization.Initialize();
+        Assert.Equal(3, localization.AvailableLanguages.Count);
+        localization.SetLanguage("fr-FR");
+        Assert.Equal("Bonjour", localization.Get("Greeting"));
+        Assert.Equal("仅中文", localization.Get("OnlyZh"));
+
+        localization.SetLanguage("en-US");
+        Assert.Equal("Hello", localization.Get("Greeting"));
+        Assert.Equal("仅中文", localization.Get("OnlyZh"));
+        Assert.Equal("Unknown_Key", localization.Get("Unknown_Key"));
+        Assert.Equal("{0", localization.Format("Broken", 123));
+    }
 }
 
-return 0;
-
-static void Assert(bool condition, string message)
+public sealed class OutputOwnershipTests
 {
-    if (!condition) throw new InvalidOperationException(message);
+    [Fact]
+    public async Task TextureOnlyExportCannotRequestFbxConversion()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = System.IO.Path.Combine(root.Path, "Output");
+        var service = CreateService();
+        var options = new WorkflowOptions
+        {
+            GameDirectory = game,
+            OutputDirectory = output,
+            GameProfile = "ue4.25",
+            ExportTextures = true,
+            ConvertToFbx = true,
+            Workers = 1
+        };
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.RunAsync(
+            [], options, (_, _) => { }, (_, _) => { }, CancellationToken.None));
+
+        Assert.Equal(LocalizationService.Text("Error_FbxRequiresModels"), error.Message);
+        Assert.False(Directory.Exists(output));
+    }
+
+    [Fact]
+    public async Task PreCancelledWorkflowDoesNotCreateOutput()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = System.IO.Path.Combine(root.Path, "Output");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => service.RunAsync(
+            [], Options(game, output), (_, _) => { }, (_, _) => { }, cancellation.Token));
+
+        Assert.False(Directory.Exists(output));
+    }
+
+    [Fact]
+    public void OutputInsideGameIsRejectedBeforeWorkflowWritesAnything()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = System.IO.Path.Combine(game, "Export");
+
+        Assert.Throws<InvalidOperationException>(() => PathSafety.EnsureOutputOutsideGame(game, output));
+        Assert.False(Directory.Exists(output));
+    }
+
+    [Fact]
+    public void SelectingContentPaksProtectsTheContainingGameDirectory()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "GameName")).FullName;
+        var content = Directory.CreateDirectory(System.IO.Path.Combine(game, "Content")).FullName;
+        var paks = Directory.CreateDirectory(System.IO.Path.Combine(content, "Paks")).FullName;
+        var unsafeOutput = System.IO.Path.Combine(game, "Exports");
+        var safeOutput = System.IO.Path.Combine(root.Path, "Exports");
+
+        Assert.Equal(game, PathSafety.GetProtectedGameDirectory(paks));
+        Assert.Throws<InvalidOperationException>(() => PathSafety.EnsureOutputOutsideGame(paks, unsafeOutput));
+        PathSafety.EnsureOutputOutsideGame(paks, safeOutput);
+    }
+
+    [Fact]
+    public void SelectingContentPaksThroughDirectoryLinkProtectsThePhysicalGameDirectory()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "GameName")).FullName;
+        var content = Directory.CreateDirectory(System.IO.Path.Combine(game, "Content")).FullName;
+        var paks = Directory.CreateDirectory(System.IO.Path.Combine(content, "Paks")).FullName;
+        var alias = System.IO.Path.Combine(root.Path, "SelectedPaks");
+        try
+        {
+            Directory.CreateSymbolicLink(alias, paks);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or NotSupportedException)
+        {
+            return;
+        }
+
+        Assert.Equal(game, PathSafety.GetProtectedGameDirectory(alias));
+        Assert.Throws<InvalidOperationException>(() =>
+            PathSafety.EnsureOutputOutsideGame(alias, System.IO.Path.Combine(game, "Exports")));
+    }
+
+    [Fact]
+    public void OutputLinkBackIntoGameIsRejected()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var target = Directory.CreateDirectory(System.IO.Path.Combine(game, "Target")).FullName;
+        var link = System.IO.Path.Combine(root.Path, "OutputLink");
+        try
+        {
+            Directory.CreateSymbolicLink(link, target);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or NotSupportedException)
+        {
+            return;
+        }
+
+        Assert.Throws<InvalidOperationException>(() => PathSafety.EnsureOutputOutsideGame(game, link));
+    }
+
+    [Fact]
+    public async Task OutputControlFileLinksAreRejectedWithoutTouchingTheirTarget()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Output")).FullName;
+        var target = System.IO.Path.Combine(root.Path, "outside.txt");
+        await File.WriteAllTextAsync(target, "keep");
+        try
+        {
+            File.CreateSymbolicLink(System.IO.Path.Combine(output, ".pakassetstudio.lock"), target);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or NotSupportedException)
+        {
+            return;
+        }
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RunAsync(
+            [], Options(game, output), (_, _) => { }, (_, _) => { }, CancellationToken.None));
+
+        Assert.Equal("keep", await File.ReadAllTextAsync(target));
+    }
+
+    [Fact]
+    public async Task NonEmptyUnownedOutputIsRejected()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Output")).FullName;
+        await File.WriteAllTextAsync(System.IO.Path.Combine(output, "unrelated.txt"), "keep");
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RunAsync(
+            [], Options(game, output), (_, _) => { }, (_, _) => { }, CancellationToken.None));
+
+        Assert.True(File.Exists(System.IO.Path.Combine(output, "unrelated.txt")));
+        Assert.False(File.Exists(System.IO.Path.Combine(output, ".pakassetstudio-output.json")));
+        Assert.False(File.Exists(System.IO.Path.Combine(output, ".pakassetstudio.lock")));
+    }
+
+    [Fact]
+    public async Task DamagedOwnershipMarkerStopsWithoutTouchingOtherFiles()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Output")).FullName;
+        var unrelated = System.IO.Path.Combine(output, "unrelated.txt");
+        await File.WriteAllTextAsync(unrelated, "keep");
+        await File.WriteAllTextAsync(
+            System.IO.Path.Combine(output, ".pakassetstudio-output.json"), "not-json");
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RunAsync(
+            [], Options(game, output), (_, _) => { }, (_, _) => { }, CancellationToken.None));
+
+        Assert.Equal("keep", await File.ReadAllTextAsync(unrelated));
+        Assert.False(File.Exists(System.IO.Path.Combine(output, ".pakassetstudio.lock")));
+    }
+
+    [Fact]
+    public async Task ManagedDirectoryLinksAreRejectedBeforeToolsRun()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Output")).FullName;
+        var external = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "External")).FullName;
+        var externalFile = System.IO.Path.Combine(external, "keep.gltf");
+        await File.WriteAllTextAsync(externalFile, "{}");
+        var service = CreateService();
+        await service.RunAsync([], Options(game, output), (_, _) => { }, (_, _) => { }, CancellationToken.None);
+        try
+        {
+            Directory.CreateSymbolicLink(System.IO.Path.Combine(output, "ExportedAssets"), external);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or NotSupportedException)
+        {
+            return;
+        }
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RunAsync(
+            [], Options(game, output, convertToFbx: true),
+            (_, _) => { }, (_, _) => { }, CancellationToken.None));
+
+        Assert.True(File.Exists(externalFile));
+    }
+
+    [Fact]
+    public async Task ExistingManagedOutputRequiresExplicitOverwrite()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Output")).FullName;
+        var service = CreateService();
+        await service.RunAsync([], Options(game, output), (_, _) => { }, (_, _) => { }, CancellationToken.None);
+        var cooked = Directory.CreateDirectory(System.IO.Path.Combine(output, "CookedAssets")).FullName;
+        var oldFile = System.IO.Path.Combine(cooked, "old.bin");
+        await File.WriteAllTextAsync(oldFile, "old");
+        var entry = new PakEntry { Name = "base.pak", FullPath = "base.pak", IsValid = true };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RunAsync(
+            [entry], Options(game, output, extractPaks: true), (_, _) => { }, (_, _) => { }, CancellationToken.None));
+
+        Assert.True(File.Exists(oldFile));
+    }
+
+    [Fact]
+    public async Task SuccessfulOverwriteRemovesPreviousOutputBackup()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Output")).FullName;
+        var service = CreateService();
+        await service.RunAsync([], Options(game, output), (_, _) => { }, (_, _) => { }, CancellationToken.None);
+        var cooked = Directory.CreateDirectory(System.IO.Path.Combine(output, "CookedAssets")).FullName;
+        await File.WriteAllTextAsync(System.IO.Path.Combine(cooked, "old.bin"), "old");
+        var entry = new PakEntry { Name = "base.pak", FullPath = "base.pak", IsValid = true };
+
+        await service.RunAsync(
+            [entry], Options(game, output, extractPaks: true, overwrite: true),
+            (_, _) => { }, (_, _) => { }, CancellationToken.None);
+
+        Assert.Empty(Directory.EnumerateDirectories(output, ".PakAssetStudio-backup-*"));
+        Assert.False(File.Exists(System.IO.Path.Combine(output, "CookedAssets", "old.bin")));
+    }
+
+    [Fact]
+    public async Task CancellingSuccessfulBackupCleanupRetainsBackupAndCompletesOutput()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Output")).FullName;
+        var service = CreateService();
+        await service.RunAsync([], Options(game, output), (_, _) => { }, (_, _) => { }, CancellationToken.None);
+        var cooked = Directory.CreateDirectory(System.IO.Path.Combine(output, "CookedAssets")).FullName;
+        await File.WriteAllTextAsync(System.IO.Path.Combine(cooked, "old.bin"), "old");
+        var entry = new PakEntry { Name = "base.pak", FullPath = "base.pak", IsValid = true };
+        using var cancellation = new CancellationTokenSource();
+        var progressValues = new List<double>();
+
+        await service.RunAsync(
+            [entry], Options(game, output, extractPaks: true, overwrite: true),
+            (_, _) => { },
+            (value, _) =>
+            {
+                progressValues.Add(value);
+                if (value == 99) cancellation.Cancel();
+            },
+            cancellation.Token);
+
+        var backup = Assert.Single(Directory.EnumerateDirectories(
+            output, ".PakAssetStudio-backup-CookedAssets-*"));
+        Assert.True(File.Exists(System.IO.Path.Combine(backup, "old.bin")));
+        Assert.True(Directory.Exists(System.IO.Path.Combine(output, "CookedAssets")));
+        Assert.Equal(100, progressValues[^1]);
+    }
+
+    [Fact]
+    public async Task FailedOverwriteRetainsPreviousOutputBackup()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Output")).FullName;
+        var setupService = CreateService();
+        await setupService.RunAsync([], Options(game, output), (_, _) => { }, (_, _) => { }, CancellationToken.None);
+        var cooked = Directory.CreateDirectory(System.IO.Path.Combine(output, "CookedAssets")).FullName;
+        await File.WriteAllTextAsync(System.IO.Path.Combine(cooked, "old.bin"), "old");
+        var failedRunner = new FakeProcessRunner(new ProcessResult(9, "failed"));
+        var failedService = new WorkflowService(failedRunner, new PakToolService(failedRunner));
+        var entry = new PakEntry { Name = "base.pak", FullPath = "base.pak", IsValid = true };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => failedService.RunAsync(
+            [entry], Options(game, output, extractPaks: true, overwrite: true),
+            (_, _) => { }, (_, _) => { }, CancellationToken.None));
+
+        var backup = Assert.Single(Directory.EnumerateDirectories(output, ".PakAssetStudio-backup-CookedAssets-*"));
+        Assert.True(File.Exists(System.IO.Path.Combine(backup, "old.bin")));
+    }
+
+    [Fact]
+    public async Task WorkflowRedactsAesKeyFromDiskAndUiLogs()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Output")).FullName;
+        const string secret = "0123456789abcdef-secret";
+        var runner = new FakeProcessRunner(new ProcessResult(0, string.Empty), $"tool echoed {secret}");
+        var service = new WorkflowService(runner, new PakToolService(runner));
+        var uiLines = new List<string>();
+        var options = Options(game, output, extractPaks: true, aesKey: secret);
+        var entry = new PakEntry { Name = "base.pak", FullPath = "base.pak", IsValid = true };
+
+        await service.RunAsync([entry], options, (line, _) => uiLines.Add(line), (_, _) => { }, CancellationToken.None);
+
+        var diskLog = await File.ReadAllTextAsync(System.IO.Path.Combine(output, "PakAssetStudio.log"));
+        Assert.DoesNotContain(secret, diskLog);
+        Assert.DoesNotContain(uiLines, line => line.Contains(secret, StringComparison.Ordinal));
+        Assert.Contains("***", diskLog);
+    }
+
+    [Fact]
+    public async Task ConcurrentWorkflowCannotUseTheSameOutputDirectory()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game")).FullName;
+        var output = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Output")).FullName;
+        var blockingRunner = new BlockingProcessRunner();
+        var firstService = new WorkflowService(blockingRunner, new PakToolService(blockingRunner));
+        var entry = new PakEntry { Name = "base.pak", FullPath = "base.pak", IsValid = true };
+        var first = firstService.RunAsync(
+            [entry], Options(game, output, extractPaks: true),
+            (_, _) => { }, (_, _) => { }, CancellationToken.None);
+
+        try
+        {
+            await blockingRunner.Started.WaitAsync(TimeSpan.FromSeconds(5));
+            var secondService = CreateService();
+            await Assert.ThrowsAsync<InvalidOperationException>(() => secondService.RunAsync(
+                [], Options(game, output), (_, _) => { }, (_, _) => { }, CancellationToken.None));
+        }
+        finally
+        {
+            blockingRunner.Release();
+            await first;
+        }
+
+        Assert.False(File.Exists(System.IO.Path.Combine(output, ".pakassetstudio.lock")));
+    }
+
+    [Fact]
+    public async Task MarkerPreventsReusingOutputForAnotherGame()
+    {
+        using var root = new TemporaryDirectory();
+        var game1 = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game1")).FullName;
+        var game2 = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Game2")).FullName;
+        var output = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "Output")).FullName;
+        var service = CreateService();
+
+        await service.RunAsync([], Options(game1, output), (_, _) => { }, (_, _) => { }, CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RunAsync(
+            [], Options(game2, output), (_, _) => { }, (_, _) => { }, CancellationToken.None));
+    }
+
+    private static WorkflowService CreateService()
+    {
+        var runner = new FakeProcessRunner(new ProcessResult(0, string.Empty));
+        return new WorkflowService(runner, new PakToolService(runner));
+    }
+
+    private static WorkflowOptions Options(
+        string game,
+        string output,
+        bool extractPaks = false,
+        string? aesKey = null,
+        bool overwrite = false,
+        bool convertToFbx = false) => new()
+        {
+            GameDirectory = game,
+            OutputDirectory = output,
+            GameProfile = string.Empty,
+            Workers = 1,
+            ExtractPaks = extractPaks,
+            AesKey = aesKey,
+            Overwrite = overwrite,
+            ConvertToFbx = convertToFbx
+        };
+}
+
+public sealed class RepakIntegrationTests
+{
+    [Fact]
+    public async Task BundledRepakCanPackScanAndApplyPatchFixture()
+    {
+        using var root = new TemporaryDirectory();
+        var game = Directory.CreateDirectory(System.IO.Path.Combine(root.Path, "游戏 Game")).FullName;
+        var runner = new ProcessRunner();
+        var pakService = new PakToolService(runner);
+
+        async Task PackAsync(string packageName, string content)
+        {
+            var source = Directory.CreateDirectory(System.IO.Path.Combine(game, packageName)).FullName;
+            var nested = Directory.CreateDirectory(System.IO.Path.Combine(source, "Content")).FullName;
+            await File.WriteAllTextAsync(System.IO.Path.Combine(nested, "fixture.txt"), content);
+            var packed = await runner.RunAsync(
+                pakService.RepakPath,
+                ["pack", source],
+                game,
+                null,
+                CancellationToken.None);
+            Assert.True(packed.ExitCode == 0, packed.Output);
+        }
+
+        await PackAsync("pakchunk0", "base-content");
+        await PackAsync("pakchunk0_2_P", "patch-content");
+        Assert.Equal(2, Directory.EnumerateFiles(game, "*.pak").Count());
+
+        var entries = await pakService.ScanAsync(game, null, null, CancellationToken.None);
+        Assert.Equal(2, entries.Count);
+        Assert.All(entries, entry => Assert.True(entry.CanAttemptExtraction));
+        Assert.Equal(
+            new[] { "pakchunk0.pak", "pakchunk0_2_P.pak" },
+            PakToolService.GetExtractionOrder(entries).Select(entry => entry.Name));
+
+        var output = System.IO.Path.Combine(root.Path, "Output");
+        var workflow = new WorkflowService(runner, pakService);
+        await workflow.RunAsync(entries, new WorkflowOptions
+        {
+            GameDirectory = game,
+            OutputDirectory = output,
+            GameProfile = string.Empty,
+            ExtractPaks = true,
+            Workers = 1
+        }, (_, _) => { }, (_, _) => { }, CancellationToken.None);
+
+        var extracted = Assert.Single(Directory.EnumerateFiles(
+            System.IO.Path.Combine(output, "CookedAssets"), "fixture.txt", SearchOption.AllDirectories));
+        Assert.Equal("patch-content", await File.ReadAllTextAsync(extracted));
+    }
+}
+
+public sealed class OptionalPakIntegrationTests
+{
+    [Fact]
+    public async Task ScanConfiguredRealPakDirectory()
+    {
+        var path = Environment.GetEnvironmentVariable("PAK_TEST_DIR");
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        Assert.True(Directory.Exists(path), $"PAK test directory does not exist: {path}");
+        var service = new PakToolService(new ProcessRunner());
+        var aesKey = Environment.GetEnvironmentVariable("PAK_TEST_AES_KEY");
+        var entries = await service.ScanAsync(path, aesKey, null, CancellationToken.None);
+
+        Assert.NotEmpty(entries);
+        Assert.Contains(entries, entry => entry.CanAttemptExtraction);
+    }
+}
+
+internal sealed class LaunchFailureProcessRunner : IProcessRunner
+{
+    public Task<ProcessResult> RunAsync(
+        string executable,
+        IEnumerable<string> arguments,
+        string? workingDirectory,
+        Action<string>? onLine,
+        CancellationToken cancellationToken,
+        ProcessPriorityClass? priority = null,
+        bool captureOutput = true) =>
+        throw new ProcessLaunchException("launch failed");
+}
+
+internal sealed class BlockingProcessRunner : IProcessRunner
+{
+    private readonly TaskCompletionSource<bool> _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task Started => _started.Task;
+
+    public void Release() => _release.TrySetResult(true);
+
+    public async Task<ProcessResult> RunAsync(
+        string executable,
+        IEnumerable<string> arguments,
+        string? workingDirectory,
+        Action<string>? onLine,
+        CancellationToken cancellationToken,
+        ProcessPriorityClass? priority = null,
+        bool captureOutput = true)
+    {
+        _started.TrySetResult(true);
+        await _release.Task.WaitAsync(cancellationToken);
+        return new ProcessResult(0, string.Empty);
+    }
+}
+
+internal sealed class FakeProcessRunner(ProcessResult result, string? emittedLine = null) : IProcessRunner
+{
+    public Task<ProcessResult> RunAsync(
+        string executable,
+        IEnumerable<string> arguments,
+        string? workingDirectory,
+        Action<string>? onLine,
+        CancellationToken cancellationToken,
+        ProcessPriorityClass? priority = null,
+        bool captureOutput = true)
+    {
+        if (emittedLine is not null) onLine?.Invoke(emittedLine);
+        return Task.FromResult(result);
+    }
+}
+
+internal sealed class TemporaryDirectory : IDisposable
+{
+    public TemporaryDirectory()
+    {
+        Path = Directory.CreateTempSubdirectory("pakassetstudio-tests-").FullName;
+    }
+
+    public string Path { get; }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(Path)) Directory.Delete(Path, recursive: true);
+        }
+        catch
+        {
+            // Best-effort test cleanup.
+        }
+    }
 }

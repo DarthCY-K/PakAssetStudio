@@ -2,6 +2,7 @@
 **/bin/
 **/obj/
 **/publish/
+**/TestResults/
 artifacts/
 releases/
 __pycache__/
@@ -17,6 +18,10 @@ __pycache__/
 # Runtime output
 *.log
 PakAssetStudio.log
+.pakassetstudio.lock
+.pakassetstudio-output.json
+.pakassetstudio-output.json.tmp
+.PakAssetStudio-backup-*/
 CookedAssets/
 ExportedAssets/
 FbxAssets/

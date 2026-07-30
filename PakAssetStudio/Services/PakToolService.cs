@@ -1,50 +1,73 @@
+using System.Diagnostics;
 using System.IO;
 using System.Text.RegularExpressions;
 using PakAssetStudio.Models;
 
 namespace PakAssetStudio.Services;
 
-public sealed class PakToolService(ProcessRunner processRunner)
+public sealed class PakToolService(IProcessRunner processRunner)
 {
+    private static readonly HashSet<string> SupportedCompressionMethods = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "none", "zlib", "gzip", "zstd"
+    };
+
     private readonly string _repakPath = Path.Combine(AppContext.BaseDirectory, "Tools", "repak", "repak.exe");
 
     public async Task<List<PakEntry>> ScanAsync(
         string root,
         string? aesKey,
         Action<int, int>? onProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ProcessPriorityClass? priority = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         EnsureToolExists();
         var normalizedRoot = Path.GetFullPath(root);
-        var files = EnumeratePakFiles(normalizedRoot).OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
+        var files = EnumeratePakFiles(normalizedRoot, cancellationToken).OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
         var result = new List<PakEntry>(files.Count);
 
         for (var index = 0; index < files.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var path = files[index];
-            var info = new FileInfo(path);
             var entry = new PakEntry
             {
-                Name = info.Name,
-                FullPath = info.FullName,
-                SizeBytes = info.Length
+                Name = Path.GetFileName(path),
+                FullPath = Path.GetFullPath(path)
             };
 
-            var arguments = BuildArguments(aesKey, "info", path);
             try
             {
+                entry.SizeBytes = new FileInfo(path).Length;
+                var arguments = BuildArguments(aesKey, "info", path);
                 var process = await processRunner.RunAsync(
-                    _repakPath, arguments, Path.GetDirectoryName(_repakPath), null, cancellationToken);
+                    _repakPath, arguments, Path.GetDirectoryName(_repakPath), null, cancellationToken, priority);
                 if (process.ExitCode == 0)
                 {
                     ParseInfo(entry, process.Output);
                     entry.IsValid = true;
+                    entry.IsCompressionSupported = IsCompressionSupported(entry.Compression);
+                    if (!entry.IsCompressionSupported)
+                        entry.ScanError = LocalizationService.TextFormat("Pak_ErrorCompression", entry.Compression);
+                }
+                else
+                {
+                    entry.ScanError = BuildDiagnostic(process.Output, aesKey, process.ExitCode);
                 }
             }
-            catch when (!cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (ProcessLaunchException)
+            {
+                throw;
+            }
+            catch (Exception ex)
             {
                 entry.IsValid = false;
+                entry.ScanError = RedactSensitive(ex.Message, aesKey);
             }
 
             result.Add(entry);
@@ -59,10 +82,27 @@ public sealed class PakToolService(ProcessRunner processRunner)
     public static IReadOnlyList<PakEntry> GetExtractionOrder(IEnumerable<PakEntry> entries)
     {
         return entries
-            .Where(entry => entry.IsValid)
+            .Where(entry => entry.CanAttemptExtraction)
             .OrderBy(entry => entry.IsPatch ? 2 : entry.IsOptional ? 1 : 0)
+            .ThenBy(entry => entry.IsPatch ? GetPatchSequence(entry.Name) : 0)
             .ThenBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(entry => entry.FullPath, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    public static bool IsCompressionSupported(string? compression)
+    {
+        if (string.IsNullOrWhiteSpace(compression)) return false;
+
+        var value = compression.Trim();
+        var hasOpeningBracket = value.StartsWith('[');
+        var hasClosingBracket = value.EndsWith(']');
+        if (hasOpeningBracket != hasClosingBracket) return false;
+        if (hasOpeningBracket) value = value[1..^1].Trim();
+        if (value.Length == 0) return false;
+
+        var methods = value.Split(',', StringSplitOptions.TrimEntries);
+        return methods.All(method => method.Length > 0 && SupportedCompressionMethods.Contains(method));
     }
 
     public static List<string> BuildArguments(string? aesKey, params string[] command)
@@ -80,35 +120,68 @@ public sealed class PakToolService(ProcessRunner processRunner)
     private void EnsureToolExists()
     {
         if (!File.Exists(_repakPath))
-        {
-            throw new FileNotFoundException("缺少 repak.exe。请重新解压完整软件包。", _repakPath);
-        }
+            throw new FileNotFoundException(LocalizationService.Text("Error_MissingRepak"), _repakPath);
     }
 
-    private static IEnumerable<string> EnumeratePakFiles(string root)
+    private static long GetPatchSequence(string name)
     {
+        var match = Regex.Match(name, @"_(\d+)_P(?:\.|$)", RegexOptions.IgnoreCase);
+        return match.Success && long.TryParse(match.Groups[1].Value, out var value) ? value : 0;
+    }
+
+    private static string BuildDiagnostic(string output, string? aesKey, int exitCode)
+    {
+        var line = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .LastOrDefault();
+        var diagnostic = string.IsNullOrWhiteSpace(line)
+            ? LocalizationService.TextFormat("Pak_ErrorExitCode", exitCode)
+            : line;
+        diagnostic = RedactSensitive(diagnostic, aesKey);
+        return diagnostic.Length <= 320 ? diagnostic : diagnostic[..320] + "...";
+    }
+
+    public static string RedactSensitive(string value, string? secret)
+    {
+        if (string.IsNullOrWhiteSpace(secret)) return value;
+        var normalized = secret.Trim();
+        var redacted = value.Replace(normalized, "***", StringComparison.OrdinalIgnoreCase);
+        if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && normalized.Length > 2)
+            redacted = redacted.Replace(normalized[2..], "***", StringComparison.OrdinalIgnoreCase);
+        return redacted;
+    }
+
+    private static IEnumerable<string> EnumeratePakFiles(string root, CancellationToken cancellationToken)
+    {
+        var physicalRoot = PathSafety.ResolvePhysicalPath(root);
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var pending = new Stack<string>();
         pending.Push(root);
         while (pending.Count > 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var directory = pending.Pop();
+            string physicalDirectory;
             string[] files;
             string[] directories;
             try
             {
+                physicalDirectory = PathSafety.ResolvePhysicalPath(directory);
+                if (!PathSafety.IsSameOrChild(physicalDirectory, physicalRoot) || !visited.Add(physicalDirectory))
+                    continue;
                 files = Directory.GetFiles(directory, "*.pak", SearchOption.TopDirectoryOnly);
                 directories = Directory.GetDirectories(directory);
             }
-            catch (UnauthorizedAccessException)
-            {
-                continue;
-            }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+                                       System.Security.SecurityException)
             {
                 continue;
             }
 
-            foreach (var file in files) yield return file;
+            foreach (var file in files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return file;
+            }
             foreach (var child in directories) pending.Push(child);
         }
     }
@@ -124,11 +197,12 @@ public sealed class PakToolService(ProcessRunner processRunner)
             else if (line.StartsWith("compression:", StringComparison.OrdinalIgnoreCase))
                 entry.Compression = Value(line);
             else if (line.StartsWith("encrypted index:", StringComparison.OrdinalIgnoreCase))
-                entry.IsEncrypted = Value(line).Equals("true", StringComparison.OrdinalIgnoreCase);
+                entry.IsIndexEncrypted = Value(line).Equals("true", StringComparison.OrdinalIgnoreCase);
             else
             {
                 var match = Regex.Match(line, @"^(\d+)\s+file entries$", RegexOptions.IgnoreCase);
-                if (match.Success) entry.FileCount = int.Parse(match.Groups[1].Value);
+                if (match.Success && int.TryParse(match.Groups[1].Value, out var count))
+                    entry.FileCount = count;
             }
         }
 
