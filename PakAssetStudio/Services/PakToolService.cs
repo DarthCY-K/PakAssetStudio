@@ -84,7 +84,7 @@ public sealed class PakToolService(IProcessRunner processRunner)
         return entries
             .Where(entry => entry.CanAttemptExtraction)
             .OrderBy(entry => entry.IsPatch ? 2 : entry.IsOptional ? 1 : 0)
-            .ThenBy(entry => entry.IsPatch ? GetPatchSequence(entry.Name) : 0)
+            .ThenBy(entry => entry.IsPatch ? GetPatchKey(entry.Name) : default)
             .ThenBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(entry => entry.FullPath, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -123,10 +123,29 @@ public sealed class PakToolService(IProcessRunner processRunner)
             throw new FileNotFoundException(LocalizationService.Text("Error_MissingRepak"), _repakPath);
     }
 
-    private static long GetPatchSequence(string name)
+    /// <summary>
+    /// 补丁排序键：(chunk, patch) 二元组。
+    /// 标准 UE 命名 <c>pakchunk&lt;N&gt;_&lt;M&gt;_P.pak</c> 按 (N, M) 排序，使同一 chunk 的
+    /// patch 链不被其他 chunk 打断；老式 <c>pakchunk&lt;N&gt;_P.pak</c> 视为该 chunk 的
+    /// 第 0 号 patch；<c>patch&lt;N&gt;.pak</c> 与无编号 <c>xxx_P.pak</c> 缺少 chunk 信息，
+    /// 统一排在最后（前者按 N 递增，后者用 MaxValue 兜底）。
+    /// </summary>
+    private static (long Chunk, long Patch) GetPatchKey(string name)
     {
-        var match = Regex.Match(name, @"_(\d+)_P(?:\.|$)", RegexOptions.IgnoreCase);
-        return match.Success && long.TryParse(match.Groups[1].Value, out var value) ? value : 0;
+        var match = Regex.Match(name, @"pakchunk(\d+)_(\d+)_P(?:\.|$)", RegexOptions.IgnoreCase);
+        if (match.Success && long.TryParse(match.Groups[1].Value, out var chunk) &&
+            long.TryParse(match.Groups[2].Value, out var patch))
+            return (chunk, patch);
+
+        match = Regex.Match(name, @"pakchunk(\d+)_P(?:\.|$)", RegexOptions.IgnoreCase);
+        if (match.Success && long.TryParse(match.Groups[1].Value, out chunk))
+            return (chunk, 0);
+
+        match = Regex.Match(name, @"(?:^|[_\-\.])patch(\d+)(?:[_\-\.]|$)", RegexOptions.IgnoreCase);
+        if (match.Success && long.TryParse(match.Groups[1].Value, out var number))
+            return (long.MaxValue, number);
+
+        return (long.MaxValue, long.MaxValue);
     }
 
     private static string BuildDiagnostic(string output, string? aesKey, int exitCode)

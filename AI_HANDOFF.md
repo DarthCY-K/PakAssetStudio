@@ -31,6 +31,8 @@ PakAssetStudio/
 PakAssetStudio.Tests/            xUnit 单元、合成 PAK 集成及可选真实 PAK 测试
 tools/merge_gltf.py              保守、非破坏、原子 glTF 合并
 tools/convert_gltf_to_fbx.py     Assimp 转换、验证和安全源清理
+tools/check_part_bounds.py       开发诊断脚本：验证分片模型世界坐标是否烘焙进几何
+                                 （不进发布包，无自动化测试）
 tools/tests/                     Python 脚本测试
 scripts/Publish.ps1             干净 publish、布局校验、ZIP 与 SHA-256
 scripts/Test-PublishLayout.ps1   本地与 CI 共用的发布布局验收

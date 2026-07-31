@@ -31,6 +31,35 @@ public sealed class PakToolTests
             ordered.Select(entry => entry.Name));
     }
 
+    [Fact]
+    public void PatchOrderGroupsByChunkAndKeepsUnknownPatchesLast()
+    {
+        var entries = new List<PakEntry>
+        {
+            Entry("pakchunk1_1_P.pak", valid: true),
+            Entry("pakchunk0_2_P.pak", valid: true),
+            Entry("pakchunk0_10_P.pak", valid: true),
+            Entry("pakchunk1_P.pak", valid: true),
+            Entry("patch2.pak", valid: true),
+            Entry("patch1.pak", valid: true),
+            Entry("Content_P.pak", valid: true),
+        };
+
+        var ordered = PakToolService.GetExtractionOrder(entries);
+
+        // 同一 chunk 的 patch 链连续且按自然序号；缺少 chunk 信息的 patch 系列与
+        // 无编号 patch 整体排在标准命名之后，避免打断 pakchunkN 链。
+        Assert.Equal(
+            new[]
+            {
+                "pakchunk0_2_P.pak", "pakchunk0_10_P.pak",
+                "pakchunk1_P.pak", "pakchunk1_1_P.pak",
+                "patch1.pak", "patch2.pak",
+                "Content_P.pak"
+            },
+            ordered.Select(entry => entry.Name));
+    }
+
     [Theory]
     [InlineData("None", true)]
     [InlineData("Zlib", true)]
