@@ -97,7 +97,7 @@ dotnet test .\PakAssetStudio.slnx -c Release
 .\scripts\Publish.ps1 -Version 0.5.0
 ```
 
-仅调试 publish 时仍可直接运行 `dotnet publish`；正式发布应使用脚本或 tag 触发 GitHub Actions。
+仅调试 publish 时仍可直接运行 `dotnet publish`；正式发布在本地运行发布脚本，产物（ZIP 与 SHA-256）输出到 `artifacts/release/`。
 
 `bin/`、`obj/`、`publish/`、`artifacts/` 和软件运行输出均已加入 `.gitignore`。
 
