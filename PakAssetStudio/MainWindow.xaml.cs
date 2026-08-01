@@ -133,7 +133,7 @@ public partial class MainWindow : FluentWindow
         try
         {
             var priority = LowResourceCheck.IsChecked == true ? ProcessPriorityClass.BelowNormal : (ProcessPriorityClass?)null;
-            var entries = await _pakToolService.ScanAsync(root, EmptyToNull(AesKeyBox.Password), (done, total) =>
+            var entries = await _pakToolService.ScanAsync(root, ParseKeys(AesKeyBox.Text), (done, total) =>
             {
                 TaskProgress.Value = total == 0 ? 0 : done * 100d / total;
                 StageText.Text = TextFormat("Status_ScanProgress", done, total);
@@ -383,7 +383,7 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    private void AesKeyBox_PasswordChanged(object sender, RoutedEventArgs e)
+    private void AesKeyBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (!IsLoaded) return;
         InvalidateScan();
@@ -477,15 +477,15 @@ public partial class MainWindow : FluentWindow
         switch (PresetBox.SelectedIndex)
         {
             case 0: // 完整导出：自动合并不具备可靠的资产关系信息，默认关闭
-                SetSteps(extract: true, models: true, textures: true, fbx: true,
+                SetSteps(extract: true, models: true, textures: true, audio: false, animations: false, fbx: true,
                     merge: false, keepGltf: false, deleteCooked: true, overwrite: false);
                 break;
             case 1: // 仅解包 PAK：cooked 本身就是产物，不做清理
-                SetSteps(extract: true, models: false, textures: false, fbx: false,
+                SetSteps(extract: true, models: false, textures: false, audio: false, animations: false, fbx: false,
                     merge: false, keepGltf: false, deleteCooked: false, overwrite: false);
                 break;
             case 2: // 仅导出资源（不转 FBX）
-                SetSteps(extract: true, models: true, textures: true, fbx: false,
+                SetSteps(extract: true, models: true, textures: true, audio: false, animations: false, fbx: false,
                     merge: false, keepGltf: false, deleteCooked: true, overwrite: false);
                 break;
                 // 3 = 自定义，不改动各开关
@@ -494,12 +494,14 @@ public partial class MainWindow : FluentWindow
         UpdateOptionState();
     }
 
-    private void SetSteps(bool extract, bool models, bool textures, bool fbx,
+    private void SetSteps(bool extract, bool models, bool textures, bool audio, bool animations, bool fbx,
         bool merge, bool keepGltf, bool deleteCooked, bool overwrite)
     {
         ExtractCheck.IsChecked = extract;
         ModelsCheck.IsChecked = models;
         TexturesCheck.IsChecked = textures;
+        AudioCheck.IsChecked = audio;
+        AnimationsCheck.IsChecked = animations;
         FbxCheck.IsChecked = fbx;
         MergeCheck.IsChecked = merge;
         KeepGltfCheck.IsChecked = keepGltf;
@@ -568,7 +570,8 @@ public partial class MainWindow : FluentWindow
         if (MergeCheck is not null)
             MergeCheck.IsEnabled = ModelsCheck.IsChecked == true;
         if (DeleteCookedCheck is not null)
-            DeleteCookedCheck.IsEnabled = ModelsCheck.IsChecked == true || TexturesCheck.IsChecked == true;
+            DeleteCookedCheck.IsEnabled = ModelsCheck.IsChecked == true || TexturesCheck.IsChecked == true ||
+                AudioCheck?.IsChecked == true || AnimationsCheck?.IsChecked == true;
     }
 
     private WorkflowOptions BuildOptions(string gameDirectory, string outputDirectory)
@@ -584,10 +587,12 @@ public partial class MainWindow : FluentWindow
             GameDirectory = Path.GetFullPath(gameDirectory),
             OutputDirectory = Path.GetFullPath(outputDirectory),
             GameProfile = profile,
-            AesKey = EmptyToNull(AesKeyBox.Password),
+            AesKeys = ParseKeys(AesKeyBox.Text),
             ExtractPaks = ExtractCheck.IsChecked == true,
             ExportModels = ModelsCheck.IsChecked == true,
             ExportTextures = TexturesCheck.IsChecked == true,
+            ExportAudio = AudioCheck.IsChecked == true,
+            ExportAnimations = AnimationsCheck.IsChecked == true,
             ConvertToFbx = FbxCheck.IsChecked == true,
             KeepGltf = FbxCheck.IsChecked == true &&
                 (KeepGltfCheck.IsChecked == true || (ModelsCheck.IsChecked == true && MergeCheck.IsChecked == true)),
@@ -616,11 +621,14 @@ public partial class MainWindow : FluentWindow
         ExtractCheck.IsEnabled = !busy;
         ModelsCheck.IsEnabled = !busy;
         TexturesCheck.IsEnabled = !busy;
+        AudioCheck.IsEnabled = !busy;
+        AnimationsCheck.IsEnabled = !busy;
         FbxCheck.IsEnabled = !busy && !(TexturesCheck.IsChecked == true && ModelsCheck.IsChecked != true);
         MergeCheck.IsEnabled = !busy && ModelsCheck.IsChecked == true;
         KeepGltfCheck.IsEnabled = !busy && FbxCheck.IsChecked == true && MergeCheck.IsChecked != true;
         DeleteCookedCheck.IsEnabled = !busy &&
-            (ModelsCheck.IsChecked == true || TexturesCheck.IsChecked == true);
+            (ModelsCheck.IsChecked == true || TexturesCheck.IsChecked == true ||
+             AudioCheck.IsChecked == true || AnimationsCheck.IsChecked == true);
         OverwriteCheck.IsEnabled = !busy;
         HeaderStatusText.Text = status;
         if (!busy && TaskProgress.Value < 100) TaskProgress.Value = 0;
@@ -745,6 +753,21 @@ public partial class MainWindow : FluentWindow
     }
 
     private static string? EmptyToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    /// <summary>解析 AES 输入：每行一个密钥，去首尾空白、空行与重复项。</summary>
+    private static IReadOnlyList<string> ParseKeys(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return [];
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var keys = new List<string>();
+        foreach (var line in value.Split('\n'))
+        {
+            var key = line.Trim();
+            if (key.Length == 0 || !seen.Add(key)) continue;
+            keys.Add(key);
+        }
+        return keys;
+    }
 
     private static string FormatBytes(long bytes)
     {

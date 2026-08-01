@@ -47,7 +47,7 @@ PakAssetStudio.log
 ## 限制
 
 - 传统 `.pak` 使用 repak；`.utoc/.ucas` IoStore 暂不支持
-- 随附 repak 明确支持 Zlib、Gzip、Zstd；其他压缩方式会在扫描时标记为不支持
+- 随附 repak 支持 None、Zlib、Gzip、Zstd 与 Oodle（Oodle 依赖随附的 `oo2core_9_win64.dll`）；其他压缩方式会在扫描时标记为不支持
 - “索引可读且压缩受支持”只是解包候选；未加密索引中的数据加密问题可能要到实际解包时才能发现
 - PAK 容器版本通常只能确定 UE 版本范围，UModel profile 必须与目标游戏实际版本匹配
 - 保守合并仅识别 `_partNN`、`_pieceNN`、`_meshNN`、`_polySurfaceNN`，不能恢复蓝图或关卡中的部件关系与变换
@@ -116,6 +116,9 @@ AI_HANDOFF.md          面向后续 AI/开发者的维护交接说明
 
 - 修复重复运行沿用旧 FBX、AES 变化不重扫、补丁覆盖受 UI 开关影响等正确性问题
 - 补丁解包顺序按 chunk 分组并自然排序，无编号补丁统一排最后
+- 支持多个 AES 密钥（每行一个，多 KeyGuid 游戏按包匹配），解包自动使用扫描验证成功的密钥
+- 新增"导出音频"（UModel -sounds，ogg/wav/ue4opus）与"导出动画"（-psk 二次调用，.psa）开关
+- 支持 Oodle 压缩（随附 oo2core_9_win64.dll，repak 同目录即启用）
 - 模型合并改为默认关闭、保守显式分组、保留源文件和原子写入
 - 增加输出目录所有权标记、独占任务锁、覆盖前备份、流式持久日志和目录链接安全检查
 - PAK 扫描区分索引可读与压缩可解包；模糊 UE 版本不再自动猜测 profile

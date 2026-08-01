@@ -21,6 +21,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="..\tools\repak\repak.exe" Link="Tools\repak\repak.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <Content Include="..\tools\repak\oo2core_9_win64.dll" Link="Tools\repak\oo2core_9_win64.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <Content Include="..\tools\repak\LICENSE-APACHE" Link="Tools\repak\LICENSE-APACHE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\tools\repak\LICENSE-MIT" Link="Tools\repak\LICENSE-MIT" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\tools\repak\README.md" Link="Tools\repak\README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

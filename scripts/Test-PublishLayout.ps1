@@ -10,6 +10,7 @@ $root = (Resolve-Path $PublishDirectory).Path
 $required = @(
     'PakAssetStudio.exe',
     'Tools/repak/repak.exe',
+    'Tools/repak/oo2core_9_win64.dll',
     'Tools/repak/LICENSE-MIT',
     'Tools/repak/LICENSE-APACHE',
     'Tools/repak/README.md',

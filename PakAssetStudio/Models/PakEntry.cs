@@ -17,6 +17,8 @@ public sealed class PakEntry
     public string MountPoint { get; set; } = "-";
     public int FileCount { get; set; }
     public bool IsIndexEncrypted { get; set; }
+    /// <summary>扫描时成功读取索引所用的 AES 密钥；未加密包为 null。</summary>
+    public string? AesKeyUsed { get; set; }
     /// <summary>repak 能读取 PAK 索引；这不代表所有文件数据都一定能解压。</summary>
     public bool IsValid { get; set; }
     public bool IsCompressionSupported { get; set; } = true;

@@ -74,7 +74,7 @@ public sealed class WorkflowService(IProcessRunner processRunner, PakToolService
 
         void WriteLog(string message, UiLogLevel level = UiLogLevel.Info)
         {
-            message = PakToolService.RedactSensitive(message, options.AesKey);
+            message = PakToolService.RedactSensitive(message, options.AesKeys);
             var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
             string? logFailure = null;
             lock (logLock)
@@ -131,8 +131,9 @@ public sealed class WorkflowService(IProcessRunner processRunner, PakToolService
                     WriteLog(LocalizationService.TextFormat("Log_ExtractPak", pak.FullPath));
 
                     // 此目录在本次运行开始时已清空；-f 只用于让后解包的 patch 正确覆盖 base。
+                    // 使用扫描阶段为该 pak 验证成功的密钥（多 KeyGuid 游戏各包密钥可能不同）。
                     var command = new[] { "unpack", pak.FullPath, "-o", cookedDirectory, "-q", "-f" };
-                    var arguments = PakToolService.BuildArguments(options.AesKey, command);
+                    var arguments = PakToolService.BuildArguments(pak.AesKeyUsed, command);
                     var result = await processRunner.RunAsync(
                         pakToolService.RepakPath,
                         arguments,
@@ -146,7 +147,7 @@ public sealed class WorkflowService(IProcessRunner processRunner, PakToolService
                 }
             }
 
-            if (options.ExportModels || options.ExportTextures)
+            if (options.ExportModels || options.ExportTextures || options.ExportAudio || options.ExportAnimations)
             {
                 EnsureManagedChild(cookedDirectory, options.OutputDirectory);
                 if (!Directory.Exists(cookedDirectory))
@@ -160,12 +161,16 @@ public sealed class WorkflowService(IProcessRunner processRunner, PakToolService
                 progress(52, LocalizationService.Text("Stage_Exporting"));
                 WriteLog(LocalizationService.TextFormat("Log_UmodelStart", options.GameProfile), UiLogLevel.Stage);
 
+                // 主导出：glTF 网格 + 纹理（+ 可选音频）。动画无法与 -gltf 同批，
+                // 需单独一次 -psk 调用（见下），因此这里保留 -noanim 开关。
                 var arguments = new List<string>
                 {
-                    $"-game={options.GameProfile}", "-export", "-gltf", "-png", "-lods", "-noanim"
+                    $"-game={options.GameProfile}", "-export", "-gltf", "-png", "-lods"
                 };
+                if (!options.ExportAnimations) arguments.Add("-noanim");
                 if (!options.ExportModels) arguments.AddRange(["-nomesh", "-nostat"]);
                 if (!options.ExportTextures) arguments.Add("-notex");
+                if (options.ExportAudio) arguments.Add("-sounds");
                 arguments.Add($"-path={cookedDirectory}");
                 arguments.Add($"-out={exportDirectory}");
                 arguments.Add("*.uasset");
@@ -187,6 +192,36 @@ public sealed class WorkflowService(IProcessRunner processRunner, PakToolService
                     throw new InvalidOperationException(LocalizationService.Text("Error_NoModelsExported"));
                 if (options.ExportTextures && !exportedKinds.HasTextures)
                     throw new InvalidOperationException(LocalizationService.Text("Error_NoTexturesExported"));
+                if (options.ExportAudio && !exportedKinds.HasAudio)
+                    throw new InvalidOperationException(LocalizationService.Text("Error_NoAudioExported"));
+
+                if (options.ExportAnimations)
+                {
+                    // 动画单独导出：格式开关全局生效，-gltf 不产出动画，必须用 -psk 再跑一次。
+                    // -nomesh -nostat -notex 只注销网格/纹理类，不影响 Skeleton/AnimSet 导出。
+                    progress(62, LocalizationService.Text("Stage_Animations"));
+                    WriteLog(LocalizationService.Text("Log_AnimationsStart"), UiLogLevel.Stage);
+                    var animationArguments = new List<string>
+                    {
+                        $"-game={options.GameProfile}", "-export", "-psk", "-nomesh", "-nostat", "-notex",
+                        $"-path={cookedDirectory}", $"-out={exportDirectory}", "*.uasset"
+                    };
+                    var animationResult = await processRunner.RunAsync(
+                        _umodelPath,
+                        animationArguments,
+                        Path.GetDirectoryName(_umodelPath),
+                        line => WriteLog(line),
+                        cancellationToken,
+                        priority,
+                        captureOutput: false);
+                    if (animationResult.ExitCode != 0)
+                        throw new InvalidOperationException(LocalizationService.Text("Error_Umodel"));
+
+                    var animationKinds = await Task.Run(
+                        () => InspectExportedKinds(exportDirectory, cancellationToken), cancellationToken);
+                    if (!animationKinds.HasAnimations)
+                        throw new InvalidOperationException(LocalizationService.Text("Error_NoAnimationsExported"));
+                }
             }
 
             if (options.MergeModels && options.ExportModels)
@@ -282,7 +317,9 @@ public sealed class WorkflowService(IProcessRunner processRunner, PakToolService
                     throw new InvalidOperationException(LocalizationService.Text("Error_Convert"));
             }
 
-            if (options.DeleteCooked && (options.ExportModels || options.ExportTextures) && Directory.Exists(cookedDirectory))
+            if (options.DeleteCooked && (options.ExportModels || options.ExportTextures ||
+                                         options.ExportAudio || options.ExportAnimations) &&
+                Directory.Exists(cookedDirectory))
             {
                 EnsureManagedChild(cookedDirectory, options.OutputDirectory);
                 progress(97, LocalizationService.Text("Stage_DeletingCooked"));
@@ -364,12 +401,14 @@ public sealed class WorkflowService(IProcessRunner processRunner, PakToolService
         if (options.ExtractPaks)
         {
             sourceBytes = entries.Where(entry => entry.CanAttemptExtraction).Sum(entry => entry.SizeBytes);
+            var exportsAssets = options.ExportModels || options.ExportTextures ||
+                                options.ExportAudio || options.ExportAnimations;
             multiplier = options.ConvertToFbx && (options.KeepGltf || options.MergeModels) ? 6d
                 : options.ConvertToFbx ? 4.5d
-                : options.ExportModels || options.ExportTextures ? 3.5d
+                : exportsAssets ? 3.5d
                 : 2.5d;
         }
-        else if (options.ExportModels || options.ExportTextures)
+        else if (options.ExportModels || options.ExportTextures || options.ExportAudio || options.ExportAnimations)
         {
             sourceBytes = GetDirectorySize(Path.Combine(options.OutputDirectory, "CookedAssets"), cancellationToken);
             multiplier = options.ConvertToFbx && (options.KeepGltf || options.MergeModels) ? 3d
@@ -694,20 +733,29 @@ public sealed class WorkflowService(IProcessRunner processRunner, PakToolService
             cancellationToken.ThrowIfCancellationRequested();
     }
 
-    private static (bool HasModels, bool HasTextures) InspectExportedKinds(
+    private static (bool HasModels, bool HasTextures, bool HasAudio, bool HasAnimations) InspectExportedKinds(
         string root,
         CancellationToken cancellationToken)
     {
         var hasModels = false;
         var hasTextures = false;
+        var hasAudio = false;
+        var hasAnimations = false;
         foreach (var path in EnumerateRegularFiles(root, cancellationToken))
         {
             var extension = Path.GetExtension(path);
             if (extension.Equals(".gltf", StringComparison.OrdinalIgnoreCase)) hasModels = true;
             else if (extension.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
                      extension.Equals(".hdr", StringComparison.OrdinalIgnoreCase)) hasTextures = true;
+            else if (extension.Equals(".ogg", StringComparison.OrdinalIgnoreCase) ||
+                     extension.Equals(".wav", StringComparison.OrdinalIgnoreCase) ||
+                     extension.Equals(".ue4opus", StringComparison.OrdinalIgnoreCase) ||
+                     extension.Equals(".fsb", StringComparison.OrdinalIgnoreCase) ||
+                     extension.Equals(".mp3", StringComparison.OrdinalIgnoreCase)) hasAudio = true;
+            else if (extension.Equals(".psa", StringComparison.OrdinalIgnoreCase) ||
+                     extension.Equals(".md5anim", StringComparison.OrdinalIgnoreCase)) hasAnimations = true;
         }
-        return (hasModels, hasTextures);
+        return (hasModels, hasTextures, hasAudio, hasAnimations);
     }
 
     private static IEnumerable<string> EnumerateRegularFiles(string root, CancellationToken cancellationToken)

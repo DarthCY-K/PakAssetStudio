@@ -14,6 +14,17 @@ Full license texts: Tools/repak/LICENSE-MIT, Tools/repak/LICENSE-APACHE
 
 ====================================================================
 
+RAD Game Tools Oodle Data Compression (oo2core_9_win64.dll)
+Version 2.9.10, redistributed alongside repak to enable Oodle decompression.
+Source: Unreal Engine's EpicGames.Oodle SDK (mirrored at
+https://github.com/WorkingRobot/OodleUE), per repak's oodle_loader.
+Oodle is proprietary software owned by RAD Game Tools; redistribution of
+this binary is permitted under the Unreal Engine EULA for the purpose of
+extracting content the user is authorized to access.
+Hash (SHA-256): 6f5d41a7892ea6b2db420f2458dad2f84a63901c9a93ce9497337b16c195f457
+
+====================================================================
+
 UE Viewer (umodel)
 Copyright (c) 2022 Konstantin Nosov
 https://www.gildor.org/en/projects/umodel

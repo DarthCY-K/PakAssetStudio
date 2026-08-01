@@ -42,7 +42,7 @@ scripts/Test-PublishLayout.ps1   本地与 CI 共用的发布布局验收
 ## 4. 工作流及不变量
 
 1. 递归发现 `.pak`，用 repak `info` 读取索引。
-2. `PakEntry.IsValid` 只表示索引可读；`CanAttemptExtraction` 还要求压缩方式为 None/Zlib/Gzip/Zstd。
+2. `PakEntry.IsValid` 只表示索引可读；`CanAttemptExtraction` 还要求压缩方式为 None/Zlib/Gzip/Zstd/Oodle（Oodle 依赖随附的 `oo2core_9_win64.dll`）。
 3. AES 输入变化必须使扫描缓存失效。不可处理的 PAK 在开始前必须由用户确认跳过。
 4. PAK 容器版本只能推出范围。V5/V7/V8A/V9 唯一对应 UE4.20/4.21/4.22/4.25；其余范围不得自动猜 profile。
 5. 输出根目录使用 `.pakassetstudio-output.json` 绑定输入游戏目录，并在任务期间持有 `.pakassetstudio.lock` 独占锁。不得操作非空、无标记的输出目录；选择 `GameName/Content/Paks` 时必须把整个 `GameName` 视为受保护输入。
@@ -58,6 +58,7 @@ scripts/Test-PublishLayout.ps1   本地与 CI 共用的发布布局验收
 
 ```text
 Tools/repak/repak.exe
+Tools/repak/oo2core_9_win64.dll
 Tools/umodel/umodel_64.exe
 Tools/umodel/SDL2_64.dll
 Tools/assimp/assimp-vc143-mt.dll

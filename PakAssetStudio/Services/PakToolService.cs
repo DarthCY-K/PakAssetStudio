@@ -9,14 +9,14 @@ public sealed class PakToolService(IProcessRunner processRunner)
 {
     private static readonly HashSet<string> SupportedCompressionMethods = new(StringComparer.OrdinalIgnoreCase)
     {
-        "none", "zlib", "gzip", "zstd"
+        "none", "zlib", "gzip", "zstd", "oodle"
     };
 
     private readonly string _repakPath = Path.Combine(AppContext.BaseDirectory, "Tools", "repak", "repak.exe");
 
     public async Task<List<PakEntry>> ScanAsync(
         string root,
-        string? aesKey,
+        IReadOnlyList<string>? aesKeys,
         Action<int, int>? onProgress,
         CancellationToken cancellationToken,
         ProcessPriorityClass? priority = null)
@@ -40,20 +40,25 @@ public sealed class PakToolService(IProcessRunner processRunner)
             try
             {
                 entry.SizeBytes = new FileInfo(path).Length;
-                var arguments = BuildArguments(aesKey, "info", path);
-                var process = await processRunner.RunAsync(
-                    _repakPath, arguments, Path.GetDirectoryName(_repakPath), null, cancellationToken, priority);
-                if (process.ExitCode == 0)
+                // 先不带密钥读取索引；失败后逐个密钥重试，记录第一个成功的密钥供解包复用。
+                // 多 KeyGuid 游戏的 pak 可能各自匹配不同密钥。
+                foreach (var key in TryKeys(aesKeys))
                 {
-                    ParseInfo(entry, process.Output);
-                    entry.IsValid = true;
-                    entry.IsCompressionSupported = IsCompressionSupported(entry.Compression);
-                    if (!entry.IsCompressionSupported)
-                        entry.ScanError = LocalizationService.TextFormat("Pak_ErrorCompression", entry.Compression);
-                }
-                else
-                {
-                    entry.ScanError = BuildDiagnostic(process.Output, aesKey, process.ExitCode);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var process = await processRunner.RunAsync(
+                        _repakPath, BuildArguments(key, "info", path), Path.GetDirectoryName(_repakPath), null, cancellationToken, priority);
+                    if (process.ExitCode == 0)
+                    {
+                        ParseInfo(entry, process.Output);
+                        entry.IsValid = true;
+                        entry.IsCompressionSupported = IsCompressionSupported(entry.Compression);
+                        if (!entry.IsCompressionSupported)
+                            entry.ScanError = LocalizationService.TextFormat("Pak_ErrorCompression", entry.Compression);
+                        entry.AesKeyUsed = key;
+                        break;
+                    }
+
+                    entry.ScanError = BuildDiagnostic(process.Output, aesKeys, process.ExitCode);
                 }
             }
             catch (OperationCanceledException)
@@ -67,7 +72,7 @@ public sealed class PakToolService(IProcessRunner processRunner)
             catch (Exception ex)
             {
                 entry.IsValid = false;
-                entry.ScanError = RedactSensitive(ex.Message, aesKey);
+                entry.ScanError = RedactSensitive(ex.Message, aesKeys);
             }
 
             result.Add(entry);
@@ -75,6 +80,17 @@ public sealed class PakToolService(IProcessRunner processRunner)
         }
 
         return result;
+    }
+
+    private static IEnumerable<string?> TryKeys(IReadOnlyList<string>? aesKeys)
+    {
+        yield return null;
+        if (aesKeys is null) yield break;
+        foreach (var key in aesKeys)
+        {
+            if (!string.IsNullOrWhiteSpace(key))
+                yield return key.Trim();
+        }
     }
 
     public string RepakPath => _repakPath;
@@ -148,25 +164,33 @@ public sealed class PakToolService(IProcessRunner processRunner)
         return (long.MaxValue, long.MaxValue);
     }
 
-    private static string BuildDiagnostic(string output, string? aesKey, int exitCode)
+    private static string BuildDiagnostic(string output, IReadOnlyList<string>? aesKeys, int exitCode)
     {
         var line = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .LastOrDefault();
         var diagnostic = string.IsNullOrWhiteSpace(line)
             ? LocalizationService.TextFormat("Pak_ErrorExitCode", exitCode)
             : line;
-        diagnostic = RedactSensitive(diagnostic, aesKey);
+        diagnostic = RedactSensitive(diagnostic, aesKeys);
         return diagnostic.Length <= 320 ? diagnostic : diagnostic[..320] + "...";
     }
 
     public static string RedactSensitive(string value, string? secret)
+        => RedactSensitive(value, secret is null ? null : new[] { secret });
+
+    public static string RedactSensitive(string value, IEnumerable<string>? secrets)
     {
-        if (string.IsNullOrWhiteSpace(secret)) return value;
-        var normalized = secret.Trim();
-        var redacted = value.Replace(normalized, "***", StringComparison.OrdinalIgnoreCase);
-        if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && normalized.Length > 2)
-            redacted = redacted.Replace(normalized[2..], "***", StringComparison.OrdinalIgnoreCase);
-        return redacted;
+        if (secrets is null) return value;
+        foreach (var secret in secrets)
+        {
+            if (string.IsNullOrWhiteSpace(secret)) continue;
+            var normalized = secret.Trim();
+            var redacted = value.Replace(normalized, "***", StringComparison.OrdinalIgnoreCase);
+            if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && normalized.Length > 2)
+                redacted = redacted.Replace(normalized[2..], "***", StringComparison.OrdinalIgnoreCase);
+            value = redacted;
+        }
+        return value;
     }
 
     private static IEnumerable<string> EnumeratePakFiles(string root, CancellationToken cancellationToken)

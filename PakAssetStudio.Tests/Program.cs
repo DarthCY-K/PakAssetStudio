@@ -64,8 +64,8 @@ public sealed class PakToolTests
     [InlineData("None", true)]
     [InlineData("Zlib", true)]
     [InlineData("[Zlib, Gzip, Zstd]", true)]
-    [InlineData("Oodle", false)]
-    [InlineData("Zlib, Oodle", false)]
+    [InlineData("Oodle", true)]
+    [InlineData("Zlib, Oodle", true)]
     [InlineData(null, false)]
     [InlineData("", false)]
     [InlineData("   ", false)]
@@ -109,28 +109,6 @@ public sealed class PakToolTests
     }
 
     [Fact]
-    public async Task ScanDoesNotCallAnOodlePakExtractable()
-    {
-        using var directory = new TemporaryDirectory();
-        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "oodle.pak"), [1, 2, 3]);
-        var runner = new FakeProcessRunner(new ProcessResult(0, """
-            mount point: ../../../
-            version: V11
-            compression: Oodle
-            encrypted index: false
-            12 file entries
-            """));
-        var service = new PakToolService(runner);
-
-        var entry = Assert.Single(await service.ScanAsync(
-            directory.Path, null, null, CancellationToken.None));
-
-        Assert.True(entry.IsValid);
-        Assert.False(entry.CanAttemptExtraction);
-        Assert.Equal(12, entry.FileCount);
-    }
-
-    [Fact]
     public async Task ScanDoesNotCallAPakWithMissingCompressionMetadataExtractable()
     {
         using var directory = new TemporaryDirectory();
@@ -149,6 +127,27 @@ public sealed class PakToolTests
         Assert.True(entry.IsValid);
         Assert.Equal("-", entry.Compression);
         Assert.False(entry.CanAttemptExtraction);
+    }
+
+    [Fact]
+    public async Task ScanMarksAnOodlePakExtractable()
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "oodle.pak"), [1, 2, 3]);
+        var runner = new FakeProcessRunner(new ProcessResult(0, """
+            mount point: ../../../
+            version: V11
+            compression: Oodle
+            encrypted index: false
+            12 file entries
+            """));
+        var service = new PakToolService(runner);
+
+        var entry = Assert.Single(await service.ScanAsync(
+            directory.Path, null, null, CancellationToken.None));
+
+        Assert.True(entry.IsValid);
+        Assert.True(entry.CanAttemptExtraction);
     }
 
     [Fact]
@@ -178,17 +177,84 @@ public sealed class PakToolTests
     {
         using var directory = new TemporaryDirectory();
         await File.WriteAllBytesAsync(Path.Combine(directory.Path, "encrypted.pak"), [1, 2, 3]);
-        var runner = new FakeProcessRunner(new ProcessResult(1, "bad key: secret-value"));
+        var runner = new FakeProcessRunner(new[]
+        {
+            new ProcessResult(1, "bad key: secret-value"),
+            new ProcessResult(1, "bad key: secret-value")
+        });
         var service = new PakToolService(runner);
 
         var entries = await service.ScanAsync(
-            directory.Path, "secret-value", null, CancellationToken.None);
+            directory.Path, ["secret-value"], null, CancellationToken.None);
 
         var entry = Assert.Single(entries);
         Assert.False(entry.IsValid);
         Assert.NotNull(entry.ScanError);
         Assert.DoesNotContain("secret-value", entry.ScanError);
         Assert.Contains("***", entry.ScanError);
+    }
+
+    [Fact]
+    public async Task ScanRetriesWithNextAesKeyWhenIndexReadFails()
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "encrypted.pak"), [1, 2, 3]);
+        var runner = new FakeProcessRunner(new[]
+        {
+            new ProcessResult(1, "bad key: first-secret"),
+            new ProcessResult(1, "bad key: second-secret"),
+            new ProcessResult(0, "version: V9\ncompression: Zlib\n1 file entries")
+        });
+        var service = new PakToolService(runner);
+
+        var entries = await service.ScanAsync(
+            directory.Path, ["first-secret", "second-secret"], null, CancellationToken.None);
+
+        var entry = Assert.Single(entries);
+        Assert.True(entry.IsValid);
+        Assert.Equal("second-secret", entry.AesKeyUsed);
+        var infoCalls = runner.Calls.Where(call => call.Arguments.Contains("info")).ToList();
+        Assert.Equal(3, infoCalls.Count); // 无密钥 + key1 + key2
+        Assert.DoesNotContain("--aes-key", infoCalls[0].Arguments);
+        Assert.Equal("--aes-key", infoCalls[1].Arguments[0]);
+        Assert.Equal("first-secret", infoCalls[1].Arguments[1]);
+        Assert.Equal("second-secret", infoCalls[2].Arguments[1]);
+    }
+
+    [Fact]
+    public async Task ScanWithAllKeysFailingKeepsLastRedactedDiagnostic()
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "encrypted.pak"), [1, 2, 3]);
+        var runner = new FakeProcessRunner(new[]
+        {
+            new ProcessResult(1, "failed with first-secret"),
+            new ProcessResult(1, "failed with first-secret"),
+            new ProcessResult(1, "failed with second-secret")
+        });
+        var service = new PakToolService(runner);
+
+        var entries = await service.ScanAsync(
+            directory.Path, ["first-secret", "second-secret"], null, CancellationToken.None);
+
+        var entry = Assert.Single(entries);
+        Assert.False(entry.IsValid);
+        Assert.NotNull(entry.ScanError);
+        Assert.DoesNotContain("first-secret", entry.ScanError);
+        Assert.DoesNotContain("second-secret", entry.ScanError);
+        Assert.Contains("***", entry.ScanError);
+    }
+
+    [Fact]
+    public void RedactSensitiveCoversMultipleSecretsIncludingHexPrefixVariants()
+    {
+        var redacted = PakToolService.RedactSensitive(
+            "keys abcdef1234567890 and 0x1234567890abcdef appear",
+            ["0xabcdef1234567890", "0x1234567890abcdef"]);
+
+        Assert.DoesNotContain("abcdef1234567890", redacted);
+        Assert.DoesNotContain("1234567890abcdef", redacted);
+        Assert.Equal(2, redacted.Split("***").Length - 1);
     }
 
     private static PakEntry Entry(string name, bool valid) =>
@@ -690,7 +756,7 @@ public sealed class OutputOwnershipTests
         var runner = new FakeProcessRunner(new ProcessResult(0, string.Empty), $"tool echoed {secret}");
         var service = new WorkflowService(runner, new PakToolService(runner));
         var uiLines = new List<string>();
-        var options = Options(game, output, extractPaks: true, aesKey: secret);
+        var options = Options(game, output, extractPaks: true, aesKeys: [secret]);
         var entry = new PakEntry { Name = "base.pak", FullPath = "base.pak", IsValid = true };
 
         await service.RunAsync([entry], options, (line, _) => uiLines.Add(line), (_, _) => { }, CancellationToken.None);
@@ -754,7 +820,7 @@ public sealed class OutputOwnershipTests
         string game,
         string output,
         bool extractPaks = false,
-        string? aesKey = null,
+        IReadOnlyList<string>? aesKeys = null,
         bool overwrite = false,
         bool convertToFbx = false) => new()
         {
@@ -763,7 +829,7 @@ public sealed class OutputOwnershipTests
             GameProfile = string.Empty,
             Workers = 1,
             ExtractPaks = extractPaks,
-            AesKey = aesKey,
+            AesKeys = aesKeys ?? [],
             Overwrite = overwrite,
             ConvertToFbx = convertToFbx
         };
@@ -832,7 +898,8 @@ public sealed class OptionalPakIntegrationTests
         Assert.True(Directory.Exists(path), $"PAK test directory does not exist: {path}");
         var service = new PakToolService(new ProcessRunner());
         var aesKey = Environment.GetEnvironmentVariable("PAK_TEST_AES_KEY");
-        var entries = await service.ScanAsync(path, aesKey, null, CancellationToken.None);
+        var aesKeys = string.IsNullOrWhiteSpace(aesKey) ? null : new[] { aesKey };
+        var entries = await service.ScanAsync(path, aesKeys, null, CancellationToken.None);
 
         Assert.NotEmpty(entries);
         Assert.Contains(entries, entry => entry.CanAttemptExtraction);
@@ -876,8 +943,23 @@ internal sealed class BlockingProcessRunner : IProcessRunner
     }
 }
 
-internal sealed class FakeProcessRunner(ProcessResult result, string? emittedLine = null) : IProcessRunner
+internal sealed class FakeProcessRunner : IProcessRunner
 {
+    private readonly Queue<ProcessResult> _results;
+    private readonly string? _emittedLine;
+
+    /// <summary>每次进程调用的记录（可执行文件 + 参数），供断言多密钥重试等行为。</summary>
+    public List<(string Executable, List<string> Arguments)> Calls { get; } = [];
+
+    public FakeProcessRunner(ProcessResult result, string? emittedLine = null)
+        : this(new[] { result }, emittedLine) { }
+
+    public FakeProcessRunner(IEnumerable<ProcessResult> results, string? emittedLine = null)
+    {
+        _results = new Queue<ProcessResult>(results);
+        _emittedLine = emittedLine;
+    }
+
     public Task<ProcessResult> RunAsync(
         string executable,
         IEnumerable<string> arguments,
@@ -887,7 +969,11 @@ internal sealed class FakeProcessRunner(ProcessResult result, string? emittedLin
         ProcessPriorityClass? priority = null,
         bool captureOutput = true)
     {
-        if (emittedLine is not null) onLine?.Invoke(emittedLine);
+        Calls.Add((executable, arguments.ToList()));
+        if (_emittedLine is not null) onLine?.Invoke(_emittedLine);
+        if (_results.Count == 0)
+            throw new InvalidOperationException("FakeProcessRunner result queue exhausted");
+        var result = _results.Dequeue();
         return Task.FromResult(result);
     }
 }

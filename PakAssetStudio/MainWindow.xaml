@@ -264,8 +264,10 @@
             </Grid>
 
             <TextBlock Text="{l:Loc Profile_AesLabel}" Style="{StaticResource FieldLabel}" />
-            <ui:PasswordBox x:Name="AesKeyBox" RevealButtonEnabled="True" ToolTip="{l:Loc Profile_AesTip}"
-                            PasswordChanged="AesKeyBox_PasswordChanged" />
+            <ui:TextBox x:Name="AesKeyBox" AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="64"
+                        FontFamily="Consolas" VerticalScrollBarVisibility="Auto"
+                        ToolTip="{l:Loc Profile_AesTip}"
+                        TextChanged="AesKeyBox_TextChanged" />
 
             <ui:ToggleSwitch x:Name="LowResourceCheck" Content="{l:Loc Profile_LowResource}" Margin="0,14,0,2"
                              ToolTip="{l:Loc Profile_LowResourceTip}" />
@@ -292,6 +294,10 @@
                              Checked="Option_Changed" Unchecked="Option_Changed" />
             <ui:ToggleSwitch x:Name="ModelsCheck" Content="{l:Loc Steps_Models}" IsChecked="True" Margin="0,8,0,0" Checked="Option_Changed" Unchecked="Option_Changed" />
             <ui:ToggleSwitch x:Name="TexturesCheck" Content="{l:Loc Steps_Textures}" IsChecked="True" Margin="0,8,0,0" Checked="Option_Changed" Unchecked="Option_Changed" />
+            <ui:ToggleSwitch x:Name="AudioCheck" Content="{l:Loc Steps_Audio}" Margin="0,8,0,0"
+                             ToolTip="{l:Loc Steps_AudioTip}" Checked="Option_Changed" Unchecked="Option_Changed" />
+            <ui:ToggleSwitch x:Name="AnimationsCheck" Content="{l:Loc Steps_Animations}" Margin="0,8,0,0"
+                             ToolTip="{l:Loc Steps_AnimationsTip}" Checked="Option_Changed" Unchecked="Option_Changed" />
             <ui:ToggleSwitch x:Name="FbxCheck" Content="{l:Loc Steps_Fbx}" IsChecked="True" Margin="0,8,0,0"
                              ToolTip="{l:Loc Steps_FbxTip}" ToolTipService.ShowOnDisabled="True"
                              Checked="Option_Changed" Unchecked="Option_Changed" />
