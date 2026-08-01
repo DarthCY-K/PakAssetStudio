@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="PakAssetStudio.Avalonia/PakAssetStudio.Avalonia.csproj" />
   <Project Path="PakAssetStudio.Tests/PakAssetStudio.Tests.csproj" />
   <Project Path="PakAssetStudio/PakAssetStudio.csproj" />
 </Solution>

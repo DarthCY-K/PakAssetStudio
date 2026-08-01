@@ -172,6 +172,7 @@
     "Error_CookedMissing": "找不到 cooked 目录：{0}",
     "Error_ExportMissing": "找不到导出目录：{0}",
     "Error_MissingUmodel": "缺少 UModel。",
+    "Error_MissingWine": "未检测到 Wine/CrossOver。macOS 版需要 Wine 才能运行 UModel 导出器。请安装 CrossOver（https://www.codeweavers.com/crossover）或通过 Homebrew 安装：brew install --cask wine-stable",
     "Error_MissingMergeScript": "缺少 glTF 合并脚本。",
     "Error_MissingPython": "缺少内置 Python 运行时。",
     "Error_MissingAssimp": "缺少 Assimp DLL。",
@@ -205,6 +206,11 @@
     "Stage_Converting": "转换并验证 FBX",
     "Stage_DeletingCooked": "删除 CookedAssets 中间产物",
     "Stage_Finalizing": "正在收尾并清理备份…",
-    "Stage_Done": "处理完成"
+    "Stage_Done": "处理完成",
+
+    "Dialog_Ok": "确定",
+    "Dialog_Cancel": "取消",
+    "Dialog_Yes": "是",
+    "Dialog_No": "否"
   }
 }

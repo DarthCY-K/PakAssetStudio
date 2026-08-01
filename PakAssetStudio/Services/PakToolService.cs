@@ -12,7 +12,7 @@ public sealed class PakToolService(IProcessRunner processRunner)
         "none", "zlib", "gzip", "zstd", "oodle"
     };
 
-    private readonly string _repakPath = Path.Combine(AppContext.BaseDirectory, "Tools", "repak", "repak.exe");
+    private readonly string _repakPath = PlatformPaths.RepakExecutable;
 
     public async Task<List<PakEntry>> ScanAsync(
         string root,

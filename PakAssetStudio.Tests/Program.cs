@@ -999,3 +999,65 @@ internal sealed class TemporaryDirectory : IDisposable
         }
     }
 }
+
+public sealed class WineServiceTests
+{
+    [Theory]
+    [InlineData("/Users/test/Game/Content/Paks", "Z:\\Users\\test\\Game\\Content\\Paks")]
+    [InlineData("/Volumes/Game/Paks", "Z:\\Volumes\\Game\\Paks")]
+    [InlineData("/", "Z:\\")]
+    public void ToWindowsPath_ConvertsMacAbsolutePathToWineDrive(string macPath, string expected)
+    {
+        Assert.Equal(expected, WineService.ToWindowsPath(macPath, useWineDrive: true));
+    }
+
+    [Theory]
+    [InlineData("C:\\Game\\Paks")]
+    [InlineData("relative/path")]
+    [InlineData("")]
+    public void ToWindowsPath_LeavesNonMacPathsUntouched(string path)
+    {
+        Assert.Equal(path, WineService.ToWindowsPath(path, useWineDrive: true));
+    }
+
+    [Fact]
+    public void ToWindowsPath_WithoutWineDriveReturnsPathUnchanged()
+    {
+        Assert.Equal("/Users/test/Game", WineService.ToWindowsPath("/Users/test/Game", useWineDrive: false));
+    }
+
+    [Fact]
+    public void BuildUmodelArguments_PrependsWineExePathOnMac()
+    {
+        var result = WineService.BuildUmodelArguments(
+            "/Applications/PakAssetStudio.app/Contents/Tools/umodel/umodel_64.exe",
+            new[] { "-export", "-gltf", "-path=Z:\\Cooked", "*.uasset" },
+            useWineDrive: true);
+
+        Assert.Equal(
+            new[]
+            {
+                "Z:\\Applications\\PakAssetStudio.app\\Contents\\Tools\\umodel\\umodel_64.exe",
+                "-export", "-gltf", "-path=Z:\\Cooked", "*.uasset"
+            },
+            result);
+    }
+
+    [Fact]
+    public void BuildUmodelArguments_ReturnsOriginalArgumentsOnWindows()
+    {
+        var arguments = new[] { "-export", "-gltf", "*.uasset" };
+
+        var result = WineService.BuildUmodelArguments(
+            "C:\\Tools\\umodel\\umodel_64.exe", arguments, useWineDrive: false);
+
+        Assert.Same(arguments, result);
+    }
+
+    [Fact]
+    public void FindWineExecutable_ReturnsNullOnWindows()
+    {
+        // 测试环境是 Windows：Wine 探测按平台短路，绝不误报存在。
+        Assert.Null(WineService.FindWineExecutable());
+    }
+}

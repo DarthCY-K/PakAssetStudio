@@ -12,10 +12,10 @@ public sealed class WorkflowService(IProcessRunner processRunner, PakToolService
     private const string OutputMarkerProduct = "PakAssetStudio";
 
     private readonly string _umodelPath = Path.Combine(AppContext.BaseDirectory, "Tools", "umodel", "umodel_64.exe");
-    private readonly string _assimpPath = Path.Combine(AppContext.BaseDirectory, "Tools", "assimp", "assimp-vc143-mt.dll");
+    private readonly string _assimpPath = PlatformPaths.AssimpLibrary;
     private readonly string _converterPath = Path.Combine(AppContext.BaseDirectory, "Tools", "convert_gltf_to_fbx.py");
     private readonly string _mergePath = Path.Combine(AppContext.BaseDirectory, "Tools", "merge_gltf.py");
-    private readonly string _pythonPath = Path.Combine(AppContext.BaseDirectory, "Tools", "python", "python.exe");
+    private readonly string _pythonPath = PlatformPaths.PythonExecutable;
 
     public async Task RunAsync(
         IReadOnlyList<PakEntry> entries,
@@ -171,14 +171,15 @@ public sealed class WorkflowService(IProcessRunner processRunner, PakToolService
                 if (!options.ExportModels) arguments.AddRange(["-nomesh", "-nostat"]);
                 if (!options.ExportTextures) arguments.Add("-notex");
                 if (options.ExportAudio) arguments.Add("-sounds");
-                arguments.Add($"-path={cookedDirectory}");
-                arguments.Add($"-out={exportDirectory}");
+                arguments.Add($"-path={WineService.ToWindowsPath(cookedDirectory)}");
+                arguments.Add($"-out={WineService.ToWindowsPath(exportDirectory)}");
                 arguments.Add("*.uasset");
 
+                var (umodelExecutable, umodelWorkingDirectory, umodelArguments) = ResolveUmodelLaunch(arguments);
                 var result = await processRunner.RunAsync(
-                    _umodelPath,
-                    arguments,
-                    Path.GetDirectoryName(_umodelPath),
+                    umodelExecutable,
+                    umodelArguments,
+                    umodelWorkingDirectory,
                     line => WriteLog(line),
                     cancellationToken,
                     priority,
@@ -204,12 +205,15 @@ public sealed class WorkflowService(IProcessRunner processRunner, PakToolService
                     var animationArguments = new List<string>
                     {
                         $"-game={options.GameProfile}", "-export", "-psk", "-nomesh", "-nostat", "-notex",
-                        $"-path={cookedDirectory}", $"-out={exportDirectory}", "*.uasset"
+                        $"-path={WineService.ToWindowsPath(cookedDirectory)}",
+                        $"-out={WineService.ToWindowsPath(exportDirectory)}", "*.uasset"
                     };
+                    var (animationExecutable, animationWorkingDirectory, animationArgumentsResolved) =
+                        ResolveUmodelLaunch(animationArguments);
                     var animationResult = await processRunner.RunAsync(
-                        _umodelPath,
-                        animationArguments,
-                        Path.GetDirectoryName(_umodelPath),
+                        animationExecutable,
+                        animationArgumentsResolved,
+                        animationWorkingDirectory,
                         line => WriteLog(line),
                         cancellationToken,
                         priority,
@@ -519,6 +523,21 @@ public sealed class WorkflowService(IProcessRunner processRunner, PakToolService
         var info = new FileInfo(path);
         if (info.LinkTarget is not null || Directory.Exists(path))
             throw new InvalidOperationException(LocalizationService.TextFormat("Error_ControlFileUnsafe", path));
+    }
+
+    /// <summary>
+    /// 解析 UModel 进程启动参数：macOS 上经 Wine 运行（exe 路径转 Z:\ 盘），Windows 平台原样。
+    /// Wine 缺失时抛错，错误信息引导安装。
+    /// </summary>
+    private (string Executable, string? WorkingDirectory, IReadOnlyList<string> Arguments) ResolveUmodelLaunch(
+        IReadOnlyList<string> arguments)
+    {
+        if (!WineService.IsWineNeeded)
+            return (_umodelPath, Path.GetDirectoryName(_umodelPath), arguments);
+        var wineExecutable = WineService.FindWineExecutable()
+            ?? throw new InvalidOperationException(LocalizationService.Text("Error_MissingWine"));
+        return (wineExecutable, Path.GetDirectoryName(wineExecutable),
+            WineService.BuildUmodelArguments(_umodelPath, arguments, useWineDrive: true));
     }
 
     private void EnsureRequiredTools(WorkflowOptions options)

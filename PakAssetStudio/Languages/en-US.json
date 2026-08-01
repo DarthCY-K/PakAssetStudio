@@ -172,6 +172,7 @@
     "Error_CookedMissing": "Cooked directory not found: {0}",
     "Error_ExportMissing": "Export directory not found: {0}",
     "Error_MissingUmodel": "UModel is missing.",
+    "Error_MissingWine": "Wine/CrossOver not found. The macOS build needs Wine to run the UModel exporter. Install CrossOver (https://www.codeweavers.com/crossover) or via Homebrew: brew install --cask wine-stable",
     "Error_MissingMergeScript": "The glTF merge script is missing.",
     "Error_MissingPython": "The embedded Python runtime is missing.",
     "Error_MissingAssimp": "The Assimp DLL is missing.",
@@ -205,6 +206,11 @@
     "Stage_Converting": "Converting & validating FBX",
     "Stage_DeletingCooked": "Deleting CookedAssets intermediates",
     "Stage_Finalizing": "Finalizing and cleaning backups...",
-    "Stage_Done": "Done"
+    "Stage_Done": "Done",
+
+    "Dialog_Ok": "OK",
+    "Dialog_Cancel": "Cancel",
+    "Dialog_Yes": "Yes",
+    "Dialog_No": "No"
   }
 }

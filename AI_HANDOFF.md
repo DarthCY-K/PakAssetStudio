@@ -107,3 +107,47 @@ dotnet test .\PakAssetStudio.slnx -c Release
 - 新增语言键必须同时更新 `zh-CN.json` 与 `en-US.json`。
 - 不记录进程参数、AES 密钥或未经脱敏的 repak 失败命令。
 - 发布前至少通过 CI、启动应用和一个合法小 PAK。CI 已用 repak 动态 base/patch fixture 实测扫描与覆盖解包，并用自生成三角形实测 glTF -> FBX -> 重新导入。
+
+## 9. macOS 移植进度（2026-08-01，未发布）
+
+### 现状
+
+- Windows WPF 版功能完整（0.6.0+）；macOS 版为**开发中**的 Avalonia 移植，尚未发布。
+- 导出链路采用方案 B（MVP）：macOS 上经 Wine/CrossOver 运行 Windows 版 `umodel_64.exe`，导出质量与 Windows 版一致；长期替代方案（CUE4Parse 重写导出器）仅调研未立项。
+
+### 项目结构
+
+- `PakAssetStudio.Avalonia/`：跨平台外壳（`net10.0` + Avalonia 12.1.1 + DataGrid 12.1.0），深色 Fluent 主题，`RootNamespace=PakAssetStudio`。
+- **共享核心层**：Avalonia csproj 用 `<Compile Include="..\PakAssetStudio\...">` Link 编译 `Models/**` 与 `Services/*.cs`（排除 WPF 专属 `LocExtension.cs`）——两个程序集编译同一份源文件，双平台逻辑永不分叉；`Languages/*.json` 同样 Link 进输出。
+- Avalonia 专属文件：`LocExtension.cs`（`{l:Loc}` 绑定扩展，语义与 WPF 版一致）、`SimpleDialog.cs`（MessageBox 替代，`ShowDialog` 异步，所有调用点已 await）、`MainWindow.axaml(.cs)`（WPF 版 779 行 code-behind 全量移植）。
+- 共享服务若新增 Windows 专属文件，必须在 Avalonia csproj 的 `Exclude` 中排除（如 `LocExtension.cs` 先例）。
+
+### 平台服务（共享文件，双平台编译）
+
+- `Services/PlatformPaths.cs`：repak（`.exe` ↔ 无扩展名）、assimp（`.dll` ↔ `libassimp.dylib`）、python（嵌入式 ↔ 系统 `python3`，工具脚本仅用标准库）按平台解析；`_umodelPath` 刻意保持 `.exe`（Wine 场景需要）。
+- `Services/WineService.cs`：Wine 探测（CrossOver → Homebrew 常见目录 → PATH）、macOS 路径 → `Z:\` 盘转换、UModel 命令行组装。公开带 `useWineDrive` 的纯函数重载，供单测直接覆盖 mac 分支（Windows 测试机上 `IsWineNeeded=false`）。
+- `WorkflowService.ResolveUmodelLaunch()`：UModel 启动三元组（可执行文件/工作目录/参数）解析；Windows 平台短路返回原值（行为与旧版一致）；Wine 缺失抛 `Error_MissingWine`（语言键已加，含安装引导）。
+
+### 已验证
+
+- 三项目（WPF + Tests + Avalonia）构建 0 警告 0 错误；测试 73/73（含 10 个 WineService 测试）。
+- Windows 上 `dotnet publish PakAssetStudio.Avalonia -r osx-arm64 --self-contained` 可产出 Mach-O arm64 可执行文件（实测）。
+- Avalonia 版窗口在 Windows 上可正常拉起（含完整 UI 与数据网格）。
+
+### 待办（无 Mac 环境）
+
+1. **repak macOS 二进制**：官方 v0.2.3 只发 win/linux（v0.1.8 历史上有 x86_64-apple-darwin，过旧不可用）；需 macOS 上 `cargo build --release`（纯 Rust，无 Windows 专属代码，已取证），arm64+x64 用 `lipo -create` 合并 universal。免费 macOS CI：Codemagic 500 分钟/月（private 可用）、Cirrus CI（public 500 分钟/月）。
+2. **Oodle mac dylib**：`liboo2coremac64.2.9.10.dylib`（SHA-256 `b09af35f6b84a61e2b6488495c7927e1cef789b969128fa1c845e51a475ec501`，与 repak 的 oodle_loader 期望逐字节一致；jsdelivr 可下载，universal 双架构）——放 repak 二进制旁即自动加载，零代码改动。
+3. **打包/签名/公证**：AvaloniaUI.Parcel 1.0.6（文档明言 Windows 可建 .app）、rcodesign 0.29.0（官方发布 Windows 预编译版，无需 Mac）、Apple Developer 账号 $99/年是公证硬前提；无账号只能 ad-hoc（Gatekeeper 拦分发）。
+4. **真机验证**：`wine + umodel_64.exe` 无头导出链路必须 Mac 实测（调研评级 B-，社区仅 Linux 一手证据）；macOS 上系统 python3 跑 merge/fbx 脚本需顺带验证。
+5. **方案 A（CUE4Parse）**：仅调研（15-25 人天；输出 .glb 与现有 merge/fbx 脚本不兼容；Crunch 贴图 mac 不可解；ACL 动画需自编 natives；4.25+ 需 .usmap；用户测试样本 .uptnl 无法验证导出链路）。
+
+### Avalonia 12 已知坑（移植实测）
+
+- **移除了 `ICollectionView`/`CollectionViewSource`/`DataGridCollectionView`** → 过滤集合自行增量维护（见 `MainWindow.axaml.cs` 的 `RefreshPakFilter`/`PakEntries_CollectionChanged`）。
+- 拖放 API 大改：`DragEventArgs.Data` → `DataTransfer`；`DataFormats.Files` → `DataFormat.File`；取文件走 `IDataTransferItem.TryGetRaw(DataFormat.File)`。
+- `ToggleSwitch` 无 Checked/Unchecked 事件 → `IsCheckedChanged`。
+- `Dispatcher.BeginInvoke` → `Dispatcher.UIThread.Post`。
+- 编译绑定默认开启 → Window 根加 `x:CompileBindings="False"` 恢复 WPF 式反射绑定。
+- DataGrid NuGet 版本 12.1.0（核心包 12.1.1，无 12.1.1）；无 `AlternatingRowBackground`；TextBox 滚动条是附加属性 `ScrollViewer.VerticalScrollBarVisibility`。
+- Avalonia `TextBox.Text` 是 `string?`（WPF 是非空），`.Trim()` 前需 `?? string.Empty`。
