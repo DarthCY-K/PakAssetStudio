@@ -1,0 +1,104 @@
+# Codemagic macOS 构建（免费 500 分钟/月，M2 实例；无需 GitHub Actions / 会员）
+#
+# 用途：完成 PakAssetStudio macOS 适配的最后一块拼图——构建 repak macOS universal 二进制，
+#       并产出 arm64 的 .app zip（M 系列 Mac）。仓库是 public，Codemagic 免费档即可使用。
+#
+# 为什么只出 arm64（不做 universal .app）：
+#   .NET 自包含发布的托管程序集是 RID 特定的（System.Private.CoreLib.dll 等随架构不同编译，
+#   实测 osx-arm64 与 osx-x64 的 runtime pack 有 190 个文件不同），lipo 只能合并 Mach-O，
+#   无法合并托管 dll → 自包含 .NET 应用无法构建 universal。Intel Mac（x64）支持需单独
+#   构建 osx-x64 版（assimp x64 dylib 还需 Homebrew bottle 或自编译），留作后续。
+#   注：repak（Rust）与 Oodle dylib 是纯 Mach-O，lipo universal 有效，已一并构建。
+#
+# 使用步骤：
+#   1. 打开 https://codemagic.io/start/ ，用 GitHub 账号登录（免费）
+#   2. Add repository → 选择 DarthCY-K/PakAssetStudio → 保存
+#   3. Start build（选 macos-universal workflow）或打 v* tag 自动触发
+#   4. 产物在 Artifacts 页：artifacts/release/PakAssetStudio-v*-macos-arm64.zip（+ .sha256）
+#
+# 正式签名/公证（rcodesign + Apple Developer 账号 $99/年）是分发前的可选步骤，
+# 当前输出为未签名 zip，Gatekeeper 会拦截首次打开，右键"打开"可放行。
+
+workflows:
+  macos-arm64:
+    name: macOS ARM64 Release
+    max_build_duration: 60
+    instance_type: macos_m2
+    environment:
+      vars:
+        REPAK_TAG: v0.2.3
+        ASSIMP_VERSION: '6.0.5'
+    triggering:
+      events:
+        - push
+        - tag
+      branch_patterns:
+        - pattern: main
+          include: true
+      tag_patterns:
+        - pattern: 'v*'
+          include: true
+    scripts:
+      - name: 安装 .NET 10 SDK 与 Rust 工具链
+        script: |
+          curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 10.0 --install-dir $HOME/.dotnet
+          export PATH="$HOME/.dotnet:$PATH"
+          dotnet --version
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          fi
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: 构建 repak universal 二进制（trumank/repak $REPAK_TAG）
+        script: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          git clone --depth 1 --branch $REPAK_TAG https://github.com/trumank/repak.git $HOME/repak
+          cd $HOME/repak
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          lipo -create -output $HOME/repak-universal \
+            target/aarch64-apple-darwin/release/repak \
+            target/x86_64-apple-darwin/release/repak
+          file $HOME/repak-universal
+
+      - name: dotnet publish（osx-arm64，自包含）
+        script: |
+          export PATH="$HOME/.dotnet:$PATH"
+          dotnet publish PakAssetStudio.Avalonia/PakAssetStudio.Avalonia.csproj \
+            -c Release -r osx-arm64 --self-contained true -o artifacts/publish
+          file artifacts/publish/PakAssetStudio.Avalonia
+
+      - name: 下载 assimp macOS dylib（官方 release macos-arm64）
+        script: |
+          curl -sL -o /tmp/assimp.zip \
+            https://github.com/assimp/assimp/releases/download/v${ASSIMP_VERSION}/macos-arm64-v${ASSIMP_VERSION}.zip
+          mkdir -p artifacts/assimp
+          cd artifacts/assimp
+          unzip -o /tmp/assimp.zip
+          ls -la
+
+      - name: 组装 .app + zip + sha256（scripts/mac_pack.py）
+        script: |
+          VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
+          python3 scripts/mac_pack.py \
+            --publish-dir artifacts/publish \
+            --repak $HOME/repak-universal \
+            --assimp artifacts/assimp/libassimp.dylib \
+            --assimp-version ${ASSIMP_VERSION} \
+            --version ${VERSION} \
+            --arch arm64 \
+            --output artifacts/release
+
+      - name: 可选 ad-hoc 签名（无 Apple Developer 账号的兜底；正式分发需真签名+公证）
+        script: |
+          if command -v rcodesign >/dev/null 2>&1; then
+            rcodesign sign --ad-hoc artifacts/release/PakAssetStudio.app
+            echo "ad-hoc signed"
+          else
+            echo "rcodesign 未安装，跳过签名"
+          fi
+
+    artifacts:
+      - artifacts/release/*.zip
+      - artifacts/release/*.sha256

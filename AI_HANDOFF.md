@@ -134,13 +134,14 @@ dotnet test .\PakAssetStudio.slnx -c Release
 - Windows 上 `dotnet publish PakAssetStudio.Avalonia -r osx-arm64 --self-contained` 可产出 Mach-O arm64 可执行文件（实测）。
 - Avalonia 版窗口在 Windows 上可正常拉起（含完整 UI 与数据网格）。
 
-### 待办（无 Mac 环境）
+### 待办（无 Mac 环境，2026-08-05 更新）
 
-1. **repak macOS 二进制**：官方 v0.2.3 只发 win/linux（v0.1.8 历史上有 x86_64-apple-darwin，过旧不可用）；需 macOS 上 `cargo build --release`（纯 Rust，无 Windows 专属代码，已取证），arm64+x64 用 `lipo -create` 合并 universal。免费 macOS CI：Codemagic 500 分钟/月（private 可用）、Cirrus CI（public 500 分钟/月）。
-2. **Oodle mac dylib**：`liboo2coremac64.2.9.10.dylib`（SHA-256 `b09af35f6b84a61e2b6488495c7927e1cef789b969128fa1c845e51a475ec501`，与 repak 的 oodle_loader 期望逐字节一致；jsdelivr 可下载，universal 双架构）——放 repak 二进制旁即自动加载，零代码改动。
-3. **打包/签名/公证**：AvaloniaUI.Parcel 1.0.6（文档明言 Windows 可建 .app）、rcodesign 0.29.0（官方发布 Windows 预编译版，无需 Mac）、Apple Developer 账号 $99/年是公证硬前提；无账号只能 ad-hoc（Gatekeeper 拦分发）。
-4. **真机验证**：`wine + umodel_64.exe` 无头导出链路必须 Mac 实测（调研评级 B-，社区仅 Linux 一手证据）；macOS 上系统 python3 跑 merge/fbx 脚本需顺带验证。
-5. **方案 A（CUE4Parse）**：仅调研（15-25 人天；输出 .glb 与现有 merge/fbx 脚本不兼容；Crunch 贴图 mac 不可解；ACL 动画需自编 natives；4.25+ 需 .usmap；用户测试样本 .uptnl 无法验证导出链路）。
+1. **repak macOS 二进制**：官方 v0.2.3 只发 win/linux（v0.1.8 历史上有 x86_64-apple-darwin，过旧不可用）；需 macOS 上 `cargo build --release`（纯 Rust，无 Windows 专属代码，已取证），arm64+x64 用 `lipo -create` 合并 universal（Rust 产物纯 Mach-O，lipo 有效）。**CI 配置已就绪**：仓库根 `codemagic.yaml`（Codemagic 免费 500 分钟/月 M2，public/private 均可，与 GitHub billing 无关）——克隆 trumank/repak v0.2.3 → 双 target release → lipo universal → dotnet publish osx-arm64 → 下载 assimp mac dylib → `scripts/mac_pack.py` 组装 .app → zip。**注意：自包含 .NET 无法做 universal .app**（实测 osx-arm64/osx-x64 双 RID 产物 190 个文件不同——runtime pack 托管 dll 按 RID 编译，System.Private.CoreLib 大小差 1.7MB，连应用自己的 dll PE Machine 字段都不同；lipo 只能合并 Mach-O 不能合并托管 dll）→ MVP 只出 arm64 版，Intel Mac x64 版留作后续（还需 x64 的 assimp dylib，官方 release 只有 macos-arm64，需 Homebrew bottle 或自编译）。**待用户操作**：codemagic.io 用 GitHub 登录 + Add repository + Start build（或打 `v*` tag 自动触发）。
+2. **Oodle mac dylib**：✅ **已落地（2026-08-05）**：`tools/repak/liboo2coremac64.2.9.10.dylib`（1,239,584 字节，SHA-256 `b09af35f6b84a61e2b6488495c7927e1cef789b969128fa1c845e51a475ec501`，与 repak 的 oodle_loader 期望逐字节一致；jsdelivr `mac/lib/` 路径下载，universal 双架构）——mac_pack.py 自动装入 `Tools/repak/`，repak 旁放同名 dylib 即自动加载，零代码改动。
+3. **assimp mac dylib**：✅ **来源已确认**：assimp 官方 release 自 v6.0.5 起发布 `macos-arm64-v6.0.5.zip`（内含 `libassimp.dylib`，与 Windows 版同一 6.0.5 版本，ctypes 加载路径与 `PlatformPaths.AssimpLibrary` 完全对齐）；解压到 `artifacts/mac-tools/assimp/`，由 mac_pack.py 装入 `Tools/assimp/`。
+4. **打包/发布脚本**：✅ **已落地（2026-08-05）**：`scripts/mac_pack.py`（纯 stdlib，Windows 嵌入式 python 与 mac 系统 python3 通用）组装 .app（Contents/MacOS = publish 输出 + Tools/{repak,umodel,assimp,py 脚本} + LICENSE/README/THIRD-PARTY-NOTICES + 生成 mac 版 THIRD-PARTY-MANIFEST.txt）、校验布局、打 zip（保留 exec 位）、输出 sha256；`scripts/Publish-mac.ps1`（本机流程：测试 → osx-arm64 publish → mac_pack，`-SkipTools` 供无 repak 时的 dev 验证）。签名/公证：rcodesign（Windows 有预编译版）ad-hoc 可本机跑；正式签名 + 公证需要 Apple Developer 账号（$99/年），codemagic.yaml 已留签名步骤。
+5. **真机验证**：`wine + umodel_64.exe` 无头导出链路必须 Mac 实测（调研评级 B-，社区仅 Linux 一手证据）；macOS 上系统 python3 跑 merge/fbx 脚本需顺带验证。另需验证：.app 首次打开 Gatekeeper 流程、Avalonia 深色主题视觉、中文输入法/路径。
+6. **方案 A（CUE4Parse）**：仅调研（15-25 人天；输出 .glb 与现有 merge/fbx 脚本不兼容；Crunch 贴图 mac 不可解；ACL 动画需自编 natives；4.25+ 需 .usmap；用户测试样本 .uptnl 无法验证导出链路）。
 
 ### Avalonia 12 已知坑（移植实测）
 
